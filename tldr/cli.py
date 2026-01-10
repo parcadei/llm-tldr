@@ -503,25 +503,29 @@ Semantic Search:
     try:
         if args.command == "tree":
             ext = set(args.ext) if args.ext else None
+            respect_ignore = not getattr(args, 'no_ignore', False)
             result = get_file_tree(
-                args.path, extensions=ext, exclude_hidden=not args.show_hidden
+                args.path, extensions=ext, exclude_hidden=not args.show_hidden, respect_ignore=respect_ignore
             )
             print(json.dumps(result, indent=2))
 
         elif args.command == "structure":
+            respect_ignore = not getattr(args, 'no_ignore', False)
             result = get_code_structure(
-                args.path, language=args.lang, max_results=args.max
+                args.path, language=args.lang, max_results=args.max, respect_ignore=respect_ignore
             )
             print(json.dumps(result, indent=2))
 
         elif args.command == "search":
             ext = set(args.ext) if args.ext else None
+            respect_ignore = not getattr(args, 'no_ignore', False)
             result = api_search(
                 args.pattern, args.path,
                 extensions=ext,
                 context_lines=args.context,
                 max_results=args.max,
                 max_files=args.max_files,
+                respect_ignore=respect_ignore,
             )
             print(json.dumps(result, indent=2))
 

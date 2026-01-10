@@ -1274,6 +1274,7 @@ def get_file_tree(
     root: str | Path,
     extensions: set[str] | None = None,
     exclude_hidden: bool = True,
+    respect_ignore: bool = True,
 ) -> dict:
     """
     Get file tree structure for a project.
@@ -1282,6 +1283,7 @@ def get_file_tree(
         root: Root directory to scan
         extensions: Optional set of extensions to include (e.g., {".py", ".ts"})
         exclude_hidden: If True, exclude hidden files/directories (default True)
+        respect_ignore: If True, respect .tldrignore patterns (default True)
 
     Returns:
         Dict with tree structure:
@@ -1303,7 +1305,9 @@ def get_file_tree(
     root = Path(root)
 
     # Load .tldrignore patterns
-    ignore_patterns = load_ignore_patterns(str(root))
+    ignore_patterns = None
+    if respect_ignore:
+        ignore_patterns = load_ignore_patterns(str(root))
 
     def scan_dir(path: Path) -> dict:
         result = {"name": path.name, "type": "dir", "children": []}
@@ -1318,21 +1322,31 @@ def get_file_tree(
             if exclude_hidden and item.name.startswith("."):
                 continue
 
+            # Check .tldrignore patterns for both files and directories
+            if ignore_patterns:
+                try:
+                    # Trailing slash needed for directory matching in some gitignore specs,
+                    # but pathspec handles directory matching via match_file(path)
+                    # For directories, we should ensure we check if the directory ITSELF is ignored
+                    # pathspec check:
+                    rel_path = item.relative_to(root)
+                    # Use posix separators for reliable matching
+                    rel_str = rel_path.as_posix()
+                    
+                    # If it's a directory, append slash to prompt directory matching rules
+                    check_path = rel_str + "/" if item.is_dir() else rel_str
+
+                    if ignore_patterns.match_file(check_path):
+                        continue
+                except ValueError:
+                    continue
+
             if item.is_dir():
                 child = scan_dir(item)
                 # Only include non-empty directories
                 if child["children"] or extensions is None:
                     result["children"].append(child)
             elif item.is_file():
-                # Check .tldrignore patterns
-                try:
-                    rel_path = item.relative_to(root)
-                    rel_str = str(rel_path)
-                    if should_ignore(rel_str, str(root), ignore_patterns):
-                        continue
-                except ValueError:
-                    continue
-
                 if extensions is None or item.suffix in extensions:
                     result["children"].append(
                         {
@@ -1354,6 +1368,7 @@ def search(
     context_lines: int = 0,
     max_results: int = 100,
     max_files: int = 10000,
+    respect_ignore: bool = True,
 ) -> list[dict]:
     """
     Search files for a regex pattern.
@@ -1365,6 +1380,7 @@ def search(
         context_lines: Number of context lines to include (default 0)
         max_results: Maximum matches to return (default 100, 0 = unlimited)
         max_files: Maximum files to scan (default 10000, 0 = unlimited)
+        respect_ignore: If True, respect .tldrignore patterns (default True)
 
     Returns:
         List of matches:
@@ -1382,7 +1398,9 @@ def search(
     import re
 
     # Load .tldrignore patterns
-    ignore_patterns = load_ignore_patterns(str(root))
+    ignore_patterns = None
+    if respect_ignore:
+        ignore_patterns = load_ignore_patterns(str(root))
 
     # Directories to skip (common junk)
     SKIP_DIRS = {
@@ -1416,9 +1434,10 @@ def search(
             continue
 
         # Check .tldrignore patterns
-        rel_str = str(rel_path)
-        if should_ignore(rel_str, str(root), ignore_patterns):
-            continue
+        if ignore_patterns:
+            rel_str = str(rel_path)
+            if should_ignore(rel_str, str(root), ignore_patterns):
+                continue
 
         # Filter by extension
         if extensions and file_path.suffix not in extensions:
@@ -1509,6 +1528,7 @@ def get_code_structure(
     root: str | Path,
     language: str = "python",
     max_results: int = 100,
+    respect_ignore: bool = True,
 ) -> dict:
     """
     Get code structure (codemaps) for all files in a project.
@@ -1517,6 +1537,7 @@ def get_code_structure(
         root: Root directory to analyze
         language: Language to analyze ("python", "typescript", "go", "rust")
         max_results: Maximum number of files to analyze (default 100)
+        respect_ignore: If True, respect .tldrignore patterns (default True)
 
     Returns:
         Dict with codemap structure:
@@ -1560,7 +1581,9 @@ def get_code_structure(
     result = {"root": str(root), "language": language, "files": []}
 
     # Load .tldrignore patterns
-    ignore_patterns = load_ignore_patterns(str(root))
+    ignore_patterns = None
+    if respect_ignore:
+        ignore_patterns = load_ignore_patterns(str(root))
 
     count = 0
     for file_path in root.rglob("*"):
@@ -1582,13 +1605,14 @@ def get_code_structure(
             continue
 
         # Check .tldrignore patterns
-        try:
-            rel_path = file_path.relative_to(root)
-            rel_str = str(rel_path)
-            if should_ignore(rel_str, str(root), ignore_patterns):
+        if ignore_patterns:
+            try:
+                rel_path = file_path.relative_to(root)
+                rel_str = str(rel_path)
+                if should_ignore(rel_str, str(root), ignore_patterns):
+                    continue
+            except ValueError:
                 continue
-        except ValueError:
-            continue
 
         try:
             info = _extract_file_impl(str(file_path))
