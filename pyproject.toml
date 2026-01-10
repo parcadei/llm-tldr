@@ -1,0 +1,125 @@
+[build-system]
+requires = ["setuptools>=45", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "llm-tldr"
+version = "1.0.0"
+description = "Token-efficient code analysis for LLMs. 5-layer stack: AST, Call Graph, CFG, DFG, PDG. 95% token savings. 15 languages."
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "Apache-2.0"}
+authors = [{name = "parcadei"}]
+maintainers = [{name = "parcadei"}]
+keywords = ["code-analysis", "llm", "ai", "tree-sitter", "call-graph", "cfg", "dfg", "pdg", "mcp", "static-analysis"]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Code Generators",
+    "Topic :: Software Development :: Documentation",
+    "Topic :: Text Processing :: Linguistic",
+]
+dependencies = [
+    "pygments-tldr>=2.19.1.3",
+    "requests>=2.25.0",
+    "mcp>=1.0.0",
+    "pathspec>=0.12.0",
+    "tree-sitter>=0.23.0",
+    "tree-sitter-python>=0.23.0",
+    "tree-sitter-typescript>=0.23.0",
+    "tree-sitter-go>=0.23.0",
+    "tree-sitter-rust>=0.23.0",
+    "tree-sitter-java>=0.23.0",
+    "tree-sitter-c>=0.21.0",
+    "tree-sitter-cpp>=0.20.0",
+    "tree-sitter-ruby>=0.20.0",
+    "tree-sitter-php>=0.20.0",
+    "tree-sitter-c-sharp>=0.20.0",
+    # tree-sitter-swift only has 0.0.1 on PyPI - keeping optional until upstream fixes
+    "tree-sitter-kotlin>=1.0.0",
+    "tree-sitter-scala>=0.23.0",
+    "tree-sitter-lua<=0.4.1",
+    "tree-sitter-elixir>=0.3.0",
+    "sentence-transformers>=5.2.0",
+    "faiss-cpu>=1.13.2",
+    "anthropic>=0.75.0",
+    "tiktoken>=0.12.0",
+    "rich>=14.2.0",
+]
+
+[project.optional-dependencies]
+ai = [
+    "anthropic>=0.3.0",
+    "openai>=1.0.0",
+]
+cli = [
+    "rich>=13.0",
+    "shtab>=1.7.0",
+]
+dev = [
+    "pytest>=6.0",
+    "pytest-cov>=2.0",
+    "black>=21.0",
+    "flake8>=3.8",
+    "mypy>=0.900",
+    "rich>=13.0",
+    "shtab>=1.7.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/parcadei/llm-tldr"
+Repository = "https://github.com/parcadei/llm-tldr"
+Issues = "https://github.com/parcadei/llm-tldr/issues"
+Documentation = "https://github.com/parcadei/llm-tldr#readme"
+
+[project.scripts]
+tldr = "tldr.cli:main"
+llm-tldr = "tldr.cli:main"
+tldr-mcp = "tldr.mcp_server:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["tldr*"]
+exclude = ["tests*"]
+
+[tool.setuptools.package-data]
+tldr = ["py.typed"]
+
+[tool.black]
+line-length = 88
+target-version = ['py38']
+include = '\.pyi?$'
+extend-exclude = '''
+/(
+  # directories
+  \.eggs
+  | \.git
+  | \.hg
+  | \.mypy_cache
+  | \.tox
+  | \.venv
+  | build
+  | dist
+)/
+'''
+
+[tool.mypy]
+python_version = "3.8"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = "--cov=tldr --cov-report=term-missing --cov-report=html"
