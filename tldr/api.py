@@ -233,7 +233,7 @@ def _validate_path_containment(file_path: str, base_path: str | None = None) -> 
         resolved = Path(file_path).resolve()
     except OSError as e:
         # Handle paths that are too long or have invalid characters
-        raise ValueError(f"Invalid path: {e}")
+        raise ValueError(f"Invalid path: {e}") from e
 
     # Check for traversal patterns in original path
     if ".." in file_path:
@@ -248,7 +248,7 @@ def _validate_path_containment(file_path: str, base_path: str | None = None) -> 
             except ValueError:
                 raise PathTraversalError(
                     f"Path '{file_path}' escapes base directory '{base_path}'"
-                )
+                ) from None
         else:
             # No explicit base path - detect suspicious traversal patterns
             # A path like "/tmp/project/../outside/file.py" is suspicious because
@@ -543,7 +543,7 @@ def _get_module_exports(
     try:
         module_info = extractor.extract(str(module_file))
     except Exception as e:
-        raise ValueError(f"Failed to parse module {module_path}: {e}")
+        raise ValueError(f"Failed to parse module {module_path}: {e}") from e
 
     functions: list[FunctionContext] = []
 
@@ -1531,7 +1531,7 @@ def search(
     try:
         compiled = re.compile(pattern)
     except re.error as e:
-        raise ValueError(f"Invalid regex pattern: {e}")
+        raise ValueError(f"Invalid regex pattern: {e}") from e
     files_scanned = 0
 
     for file_path in root.rglob("*"):

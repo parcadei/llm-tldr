@@ -281,8 +281,14 @@ class SalsaDB:
             if key in self._query_cache:
                 if self._is_entry_valid(key):
                     self._stats.cache_hits += 1
-                    # Register dependency to parent even on cache hit
+                    # Register dependency to parent even on cache hit.
+                    # Must push key onto stack so _register_dependency_to_parent
+                    # sees the correct parent-child relationship:
+                    # stack[-2] = parent (the currently executing query)
+                    # stack[-1] = child (the cached query being called)
+                    self._query_stack.append(key)
                     self._register_dependency_to_parent(key)
+                    self._query_stack.pop()
                     return cast(T, self._query_cache[key].result)
 
             self._stats.cache_misses += 1

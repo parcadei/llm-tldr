@@ -22,10 +22,61 @@ Usage:
     mark_dirty_batch(project_path, ["src/a.py", "src/b.py", "src/c.py"])
 """
 
-import fcntl
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Iterable, List, Set, Union
+from typing import Any, Callable, Iterable, List, Set, Union
+
+# Platform-specific file locking
+# Unix uses fcntl.flock(), Windows uses msvcrt.locking()
+_lock_file: Callable[[object], None]
+_unlock_file: Callable[[object], None]
+
+if sys.platform == "win32":
+    try:
+        import msvcrt
+
+        def _lock_file(f: object) -> None:
+            """Acquire exclusive lock on file (Windows)."""
+            try:
+                msvcrt.locking(f.fileno(), msvcrt.LK_LOCK, 1)  # type: ignore[union-attr]
+            except (OSError, IOError):
+                pass  # Best effort - continue without lock
+
+        def _unlock_file(f: object) -> None:
+            """Release lock on file (Windows)."""
+            try:
+                msvcrt.locking(f.fileno(), msvcrt.LK_UNLCK, 1)  # type: ignore[union-attr]
+            except (OSError, IOError):
+                pass  # Ignore unlock errors
+
+    except ImportError:
+        # Fallback if msvcrt unavailable (shouldn't happen on Windows)
+        def _lock_file(f: object) -> None:
+            pass
+
+        def _unlock_file(f: object) -> None:
+            pass
+else:
+    # Unix-like systems (Linux, macOS, BSD)
+    try:
+        import fcntl
+
+        def _lock_file(f: object) -> None:
+            """Acquire exclusive lock on file (Unix)."""
+            fcntl.flock(f.fileno(), fcntl.LOCK_EX)  # type: ignore[union-attr]
+
+        def _unlock_file(f: object) -> None:
+            """Release lock on file (Unix)."""
+            fcntl.flock(f.fileno(), fcntl.LOCK_UN)  # type: ignore[union-attr]
+
+    except ImportError:
+        # Fallback for exotic Unix-like systems without fcntl
+        def _lock_file(f: object) -> None:
+            pass
+
+        def _unlock_file(f: object) -> None:
+            pass
 
 # orjson is faster but optional - fallback to stdlib json
 try:
@@ -104,7 +155,7 @@ def _mark_dirty_impl(
     # Use file locking for atomicity - prevents concurrent processes from
     # losing dirty markers due to read-modify-write race
     with open(dirty_path, "a+") as f:
-        fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+        _lock_file(f)
         try:
             # Read existing content
             f.seek(0)
@@ -140,7 +191,7 @@ def _mark_dirty_impl(
                 f.truncate()
                 f.write(_json_dumps(data))
         finally:
-            fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+            _unlock_file(f)
 
 
 def mark_dirty(project_path: Union[str, Path], edited_file: str) -> None:

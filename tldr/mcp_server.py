@@ -124,10 +124,10 @@ def _ensure_daemon(project: str, timeout: float = 10.0) -> None:
                     stderr=subprocess.DEVNULL,
                     start_new_session=True,
                 )
-            except FileNotFoundError:
-                raise RuntimeError(f"Python executable not found: {sys.executable}")
+            except FileNotFoundError as e:
+                raise RuntimeError(f"Python executable not found: {sys.executable}") from e
             except OSError as e:
-                raise RuntimeError(f"Failed to start TLDR daemon process: {e}")
+                raise RuntimeError(f"Failed to start TLDR daemon process: {e}") from e
 
             # Wait for daemon to be ready
             start = time.time()
@@ -171,18 +171,18 @@ def _send_raw(project: str, command: dict) -> dict:
         try:
             return json.loads(b"".join(chunks))
         except json.JSONDecodeError as e:
-            raise RuntimeError(f"Invalid JSON response from daemon: {e}")
-    except FileNotFoundError:
-        raise RuntimeError(f"TLDR daemon not running for {project} (socket not found)")
-    except ConnectionRefusedError:
-        raise RuntimeError(f"TLDR daemon refused connection for {project}")
-    except BrokenPipeError:
-        raise RuntimeError(f"TLDR daemon crashed during request for {project}")
-    except socket.timeout:
-        raise RuntimeError(f"TLDR daemon timed out (30s) for {project}")
+            raise RuntimeError(f"Invalid JSON response from daemon: {e}") from e
+    except FileNotFoundError as e:
+        raise RuntimeError(f"TLDR daemon not running for {project} (socket not found)") from e
+    except ConnectionRefusedError as e:
+        raise RuntimeError(f"TLDR daemon refused connection for {project}") from e
+    except BrokenPipeError as e:
+        raise RuntimeError(f"TLDR daemon crashed during request for {project}") from e
+    except socket.timeout as e:
+        raise RuntimeError(f"TLDR daemon timed out (30s) for {project}") from e
     except OSError as e:
         # Catch other socket-related OS errors
-        raise RuntimeError(f"Socket error communicating with TLDR daemon: {e}")
+        raise RuntimeError(f"Socket error communicating with TLDR daemon: {e}") from e
     finally:
         sock.close()
 

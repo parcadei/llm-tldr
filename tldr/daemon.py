@@ -1350,7 +1350,7 @@ class TLDRDaemon:
                 sock.bind((addr, port))
             except (PermissionError, OSError) as e:
                 sock.close()
-                raise RuntimeError(f"Failed to bind socket at {addr}:{port}: {e}")
+                raise RuntimeError(f"Failed to bind socket at {addr}:{port}: {e}") from e
             sock.listen(5)
             sock.settimeout(1.0)
             logger.info(f"Listening on {addr}:{port}")
@@ -1366,7 +1366,7 @@ class TLDRDaemon:
                 sock.bind(str(self.socket_path))
             except (PermissionError, OSError) as e:
                 sock.close()
-                raise RuntimeError(f"Failed to bind socket at {self.socket_path}: {e}")
+                raise RuntimeError(f"Failed to bind socket at {self.socket_path}: {e}") from e
             sock.listen(5)
             sock.settimeout(1.0)
             logger.info(f"Listening on {self.socket_path}")

@@ -83,6 +83,10 @@ except ImportError:
         return hashlib.sha1(data).hexdigest()
 
 
+# Languages supported by the call graph extraction system
+SUPPORTED_LANGUAGES: frozenset[str] = frozenset({"python", "typescript", "go", "rust"})
+
+
 @dataclass(frozen=True)
 class Edge:
     """Represents a call edge from one function to another.
@@ -273,7 +277,18 @@ def extract_edges_from_file(
         List of Edge objects representing intra-file calls, or None if
         extraction failed (e.g., syntax error). Empty list means file
         has no calls (valid state).
+
+    Raises:
+        ValueError: If lang is not a supported language
     """
+    # Validate language early to fail fast on misconfiguration
+    # This prevents silent failures where unsupported languages return None
+    if lang not in SUPPORTED_LANGUAGES:
+        raise ValueError(
+            f"Unsupported language: {lang!r}. "
+            f"Supported languages: {sorted(SUPPORTED_LANGUAGES)}"
+        )
+
     path = Path(file_path)
 
     # Pre-check: verify file can be parsed before extraction
@@ -292,6 +307,8 @@ def extract_edges_from_file(
         file_name = path.name
 
     # Get the appropriate extractor based on language
+    # Note: lang is already validated against SUPPORTED_LANGUAGES above,
+    # but we keep this structure explicit for maintainability
     if lang == "python":
         extractor = _extract_file_calls
     elif lang == "typescript":
@@ -301,7 +318,12 @@ def extract_edges_from_file(
     elif lang == "rust":
         extractor = _extract_rust_file_calls
     else:
-        raise ValueError(f"Unsupported language: {lang}")
+        # This branch is only reachable if SUPPORTED_LANGUAGES is extended
+        # without adding a corresponding extractor - a programming error
+        raise ValueError(
+            f"Language {lang!r} is in SUPPORTED_LANGUAGES but has no extractor. "
+            f"This is a bug - please add an extractor for {lang!r}."
+        )
 
     try:
         # Use project root or file's parent as root

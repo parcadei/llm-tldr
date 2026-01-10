@@ -389,7 +389,7 @@ class TreeCache:
             file_path: Path to check
 
         Returns:
-            SHA1 hash string if cached, None if not in cache
+            Hash string (blake3 if available, SHA1 fallback) if cached, None otherwise
         """
         if file_path in self._index:
             return self._index[file_path].source_hash

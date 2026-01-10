@@ -60,7 +60,9 @@ def is_test_file(file_path: str) -> bool:
     if name.endswith((".js", ".jsx", ".ts", ".tsx")):
         if ".test." in name or ".spec." in name:
             return True
-        if name.startswith("test_") or name.endswith(("_test.js", "_test.ts")):
+        if name.startswith("test_") or name.endswith(
+            ("_test.js", "_test.jsx", "_test.ts", "_test.tsx")
+        ):
             return True
 
     # Go tests
@@ -71,9 +73,9 @@ def is_test_file(file_path: str) -> bool:
     if name.endswith(".rs") and (name.startswith("test_") or name == "tests.rs"):
         return True
 
-    # Check if in test directory
-    parts = path.parts
-    return "tests" in parts or "test" in parts or "__tests__" in parts
+    # Check if in test directory (case-insensitive)
+    parts_lower = [p.lower() for p in path.parts]
+    return "tests" in parts_lower or "test" in parts_lower or "__tests__" in parts_lower
 
 
 def get_module_name(file_path: str, project_path: str) -> str | None:

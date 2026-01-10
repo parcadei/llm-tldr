@@ -67,7 +67,7 @@ class DurablePartition:
 
     package_key: str = ""
     _edges: Set[Tuple[str, str, str, str]] = field(default_factory=set)
-    _edges_by_file: Dict[str, List[Tuple[str, str, str, str]]] = field(
+    _edges_by_file: Dict[str, Set[Tuple[str, str, str, str]]] = field(
         default_factory=dict
     )
 
@@ -80,8 +80,8 @@ class DurablePartition:
 
         # Index by source file for fast lookup
         if src_file not in self._edges_by_file:
-            self._edges_by_file[src_file] = []
-        self._edges_by_file[src_file].append(edge)
+            self._edges_by_file[src_file] = set()
+        self._edges_by_file[src_file].add(edge)
 
     @property
     def edges(self) -> Set[Tuple[str, str, str, str]]:
@@ -90,7 +90,7 @@ class DurablePartition:
 
     def get_edges_for_file(self, file_path: str) -> List[Tuple[str, str, str, str]]:
         """Return all edges originating from a specific file."""
-        return self._edges_by_file.get(file_path, [])
+        return list(self._edges_by_file.get(file_path, set()))
 
     def to_dict(self) -> dict:
         """Serialize to dictionary for JSON storage."""

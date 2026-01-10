@@ -505,7 +505,7 @@ class HybridExtractor:
             return parser.parse(source)
         except Exception as e:
             logger.error(f"Tree-sitter parse failed for {file_path} ({language}): {e}")
-            raise ParseError(file_path, language, e)
+            raise ParseError(file_path, language, e) from e
 
     def _try_tree_sitter(
         self, extractor_method, file_path: Path, language: str

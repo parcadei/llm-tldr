@@ -763,8 +763,7 @@ class TreeSitterDefUseVisitor:
         "property_declaration",
         "value_binding_pattern",
         "directly_assignable_expression",
-        # Kotlin
-        "variable_declaration",  # val/var
+        # Kotlin uses "property_declaration" which is already included above
     }
 
     # Parameter node types
@@ -795,7 +794,9 @@ class TreeSitterDefUseVisitor:
 
     def get_node_text(self, node) -> str:
         """Get source text for a node."""
-        return self.source[node.start_byte : node.end_byte].decode("utf-8")
+        return self.source[node.start_byte : node.end_byte].decode(
+            "utf-8", errors="replace"
+        )
 
     def visit(self, node):
         """Visit a node and its children."""
@@ -925,7 +926,6 @@ class TreeSitterDefUseVisitor:
             "use",
             "impl",
             "trait",
-            "struct",
             "enum",
             "self",
             "Self",
@@ -1378,7 +1378,7 @@ def _find_c_function_by_name(root, name: str, source: bytes):
                 if inner_decl and inner_decl.type == "identifier":
                     func_name = source[
                         inner_decl.start_byte : inner_decl.end_byte
-                    ].decode("utf-8")
+                    ].decode("utf-8", errors="replace")
                     if func_name == name:
                         return node
 
@@ -1460,7 +1460,7 @@ def _find_cpp_function_by_name(root, name: str, source: bytes):
                 if inner_decl and inner_decl.type in ("identifier", "field_identifier"):
                     func_name = source[
                         inner_decl.start_byte : inner_decl.end_byte
-                    ].decode("utf-8")
+                    ].decode("utf-8", errors="replace")
                     if func_name == name:
                         return node
 
@@ -1530,7 +1530,7 @@ def _find_ruby_function_by_name(root, name: str, source: bytes):
             name_node = node.child_by_field_name("name")
             if name_node:
                 func_name = source[name_node.start_byte : name_node.end_byte].decode(
-                    "utf-8"
+                    "utf-8", errors="replace"
                 )
                 if func_name == name:
                     return node
@@ -1562,7 +1562,7 @@ def _find_function_by_name(root, name: str, source: bytes):
             name_node = node.child_by_field_name("name")
             if name_node:
                 func_name = source[name_node.start_byte : name_node.end_byte].decode(
-                    "utf-8"
+                    "utf-8", errors="replace"
                 )
                 if func_name == name:
                     return node
@@ -1633,7 +1633,7 @@ def _find_php_function_by_name(root, name: str, source: bytes):
             name_node = node.child_by_field_name("name")
             if name_node:
                 func_name = source[name_node.start_byte : name_node.end_byte].decode(
-                    "utf-8"
+                    "utf-8", errors="replace"
                 )
                 if func_name == name:
                     return node
@@ -1643,7 +1643,7 @@ def _find_php_function_by_name(root, name: str, source: bytes):
             name_node = node.child_by_field_name("name")
             if name_node:
                 func_name = source[name_node.start_byte : name_node.end_byte].decode(
-                    "utf-8"
+                    "utf-8", errors="replace"
                 )
                 if func_name == name:
                     return node
@@ -1670,7 +1670,9 @@ class PHPDefUseVisitor:
 
     def get_node_text(self, node) -> str:
         """Get source text for a node."""
-        return self.source[node.start_byte : node.end_byte].decode("utf-8")
+        return self.source[node.start_byte : node.end_byte].decode(
+            "utf-8", errors="replace"
+        )
 
     def visit(self, node):
         """Visit a node and its children."""
@@ -1878,7 +1880,7 @@ def _find_swift_function_by_name(root, name: str, source: bytes):
             name_node = node.child_by_field_name("name")
             if name_node:
                 func_name = source[name_node.start_byte : name_node.end_byte].decode(
-                    "utf-8"
+                    "utf-8", errors="replace"
                 )
                 if func_name == name:
                     return node
@@ -1905,7 +1907,9 @@ class SwiftDefUseVisitor:
 
     def get_node_text(self, node) -> str:
         """Get source text for a node."""
-        return self.source[node.start_byte : node.end_byte].decode("utf-8")
+        return self.source[node.start_byte : node.end_byte].decode(
+            "utf-8", errors="replace"
+        )
 
     def visit(self, node):
         """Visit a node and its children."""
@@ -2086,7 +2090,7 @@ def _find_csharp_function_by_name(root, name: str, source: bytes):
             name_node = node.child_by_field_name("name")
             if name_node:
                 func_name = source[name_node.start_byte : name_node.end_byte].decode(
-                    "utf-8"
+                    "utf-8", errors="replace"
                 )
                 if func_name == name:
                     return node
@@ -2113,7 +2117,9 @@ class CSharpDefUseVisitor:
 
     def get_node_text(self, node) -> str:
         """Get source text for a node."""
-        return self.source[node.start_byte : node.end_byte].decode("utf-8")
+        return self.source[node.start_byte : node.end_byte].decode(
+            "utf-8", errors="replace"
+        )
 
     def visit(self, node):
         """Visit a node and its children."""
@@ -2322,7 +2328,7 @@ def _find_kotlin_function_by_name(root, name: str, source: bytes):
             for child in node.children:
                 if child.type == "identifier":
                     func_name = source[child.start_byte : child.end_byte].decode(
-                        "utf-8"
+                        "utf-8", errors="replace"
                     )
                     if func_name == name:
                         return node
@@ -2350,7 +2356,9 @@ class KotlinDefUseVisitor:
 
     def get_node_text(self, node) -> str:
         """Get source text for a node."""
-        return self.source[node.start_byte : node.end_byte].decode("utf-8")
+        return self.source[node.start_byte : node.end_byte].decode(
+            "utf-8", errors="replace"
+        )
 
     def visit(self, node):
         """Visit a node and its children."""
@@ -2582,7 +2590,7 @@ def _find_scala_function_by_name(root, name: str, source: bytes):
             name_node = node.child_by_field_name("name")
             if name_node:
                 func_name = source[name_node.start_byte : name_node.end_byte].decode(
-                    "utf-8"
+                    "utf-8", errors="replace"
                 )
                 if func_name == name:
                     return node
@@ -2609,7 +2617,9 @@ class ScalaDefUseVisitor:
 
     def get_node_text(self, node) -> str:
         """Get source text for a node."""
-        return self.source[node.start_byte : node.end_byte].decode("utf-8")
+        return self.source[node.start_byte : node.end_byte].decode(
+            "utf-8", errors="replace"
+        )
 
     def visit(self, node):
         """Visit a node and its children."""
@@ -2894,7 +2904,7 @@ def _find_lua_function_by_name(root, name: str, source: bytes):
             for child in node.children:
                 if child.type == "identifier":
                     func_name = source[child.start_byte : child.end_byte].decode(
-                        "utf-8"
+                        "utf-8", errors="replace"
                     )
                     if func_name == name:
                         return node
@@ -2904,7 +2914,7 @@ def _find_lua_function_by_name(root, name: str, source: bytes):
                     field = child.child_by_field_name("field")
                     if field:
                         func_name = source[field.start_byte : field.end_byte].decode(
-                            "utf-8"
+                            "utf-8", errors="replace"
                         )
                         if func_name == name:
                             return node
@@ -2936,7 +2946,9 @@ class LuaDefUseVisitor:
 
     def get_node_text(self, node) -> str:
         """Get source text for a node."""
-        return self.source[node.start_byte : node.end_byte].decode("utf-8")
+        return self.source[node.start_byte : node.end_byte].decode(
+            "utf-8", errors="replace"
+        )
 
     def visit(self, node):
         """Visit a node and its children."""
@@ -3167,7 +3179,9 @@ class ElixirDefUseVisitor:
 
     def get_node_text(self, node) -> str:
         """Get source text for a node."""
-        return self.source[node.start_byte : node.end_byte].decode("utf-8")
+        return self.source[node.start_byte : node.end_byte].decode(
+            "utf-8", errors="replace"
+        )
 
     def visit(self, node):
         """Visit a node and its children."""
@@ -3396,7 +3410,7 @@ def _find_elixir_function_by_name(root, name: str, source: bytes):
             for child in node.children:
                 if child.type == "identifier":
                     call_name = source[child.start_byte : child.end_byte].decode(
-                        "utf-8"
+                        "utf-8", errors="replace"
                     )
                     break
 
@@ -3416,14 +3430,14 @@ def _find_elixir_function_by_name(root, name: str, source: bytes):
                                 if c.type == "identifier":
                                     func_name = source[
                                         c.start_byte : c.end_byte
-                                    ].decode("utf-8")
+                                    ].decode("utf-8", errors="replace")
                                     if func_name == name:
                                         return node
                         elif arg_child.type == "identifier":
                             # Function without params: def func_name do
                             func_name = source[
                                 arg_child.start_byte : arg_child.end_byte
-                            ].decode("utf-8")
+                            ].decode("utf-8", errors="replace")
                             if func_name == name:
                                 return node
 
