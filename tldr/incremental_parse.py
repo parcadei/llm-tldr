@@ -190,9 +190,12 @@ class TreeCache:
             try:
                 with open(self._index_path) as f:
                     data = json.load(f)
-                self._index = {
-                    k: CacheEntry(**v) for k, v in data.items()
-                }
+                self._index = {}
+                for k, v in data.items():
+                    # Re-encode source back to bytes (saved as UTF-8 string for JSON)
+                    if "source" in v and isinstance(v["source"], str):
+                        v["source"] = v["source"].encode("utf-8")
+                    self._index[k] = CacheEntry(**v)
             except (json.JSONDecodeError, TypeError) as e:
                 logger.warning(f"Failed to load cache index: {e}")
                 self._index = {}

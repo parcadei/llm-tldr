@@ -35,13 +35,11 @@ from typing import (
     Any,
     Callable,
     Dict,
-    Generic,
     List,
     Optional,
     Set,
     Tuple,
     TypeVar,
-    Union,
 )
 
 # Type variables for generic query handling
@@ -137,6 +135,9 @@ class SalsaDB:
         # Active query stack for dependency tracking
         self._query_stack: List[QueryKey] = []
 
+        # Pending dependencies for queries currently being computed
+        self._pending_deps: Dict[QueryKey, Set[QueryKey]] = {}
+
     # -------------------------------------------------------------------------
     # File Management
     # -------------------------------------------------------------------------
@@ -219,18 +220,15 @@ class SalsaDB:
         with self._lock:
             # Check cache first
             if key in self._query_cache:
-                entry = self._query_cache[key]
-                if self._is_entry_valid(entry):
+                if self._is_entry_valid(key):
                     self._stats.cache_hits += 1
                     # Still register dependency to parent even on cache hit
                     self._register_dependency_to_parent(key)
-                    return entry.result
+                    return self._query_cache[key].result
 
             self._stats.cache_misses += 1
 
             # Create a placeholder for collecting dependencies during execution
-            if not hasattr(self, "_pending_deps"):
-                self._pending_deps: Dict[QueryKey, Set[QueryKey]] = {}
             self._pending_deps[key] = set()
 
             # Push onto query stack for dependency tracking
@@ -262,6 +260,11 @@ class SalsaDB:
 
                 self._query_cache[key] = entry
 
+                # Register dependency to parent only on successful completion
+                # Must be inside try block to avoid registering failed queries
+                # as dependencies (which corrupts parent's validity check)
+                self._register_dependency_to_parent(key)
+
                 return result
 
             finally:
@@ -270,9 +273,6 @@ class SalsaDB:
                 # Clean up pending deps for this key
                 if key in self._pending_deps:
                     del self._pending_deps[key]
-
-                # Register dependency to parent
-                self._register_dependency_to_parent(key)
 
     def _register_dependency_to_parent(self, child_key: QueryKey) -> None:
         """Register a child query as a dependency of the current parent query."""
@@ -323,24 +323,46 @@ class SalsaDB:
             return frozenset(self._to_hashable(x) for x in obj)
         return obj
 
-    def _is_entry_valid(self, entry: CacheEntry) -> bool:
+    def _is_entry_valid(
+        self, key: QueryKey, visited: Optional[Set[QueryKey]] = None
+    ) -> bool:
         """Check if a cache entry is still valid.
 
         An entry is valid if:
         - All file dependencies have the same revision
         - All query dependencies are still valid
+
+        Args:
+            key: The query key to validate
+            visited: Set of already-visited keys for cycle detection
+
+        Returns:
+            True if the entry is valid, False otherwise
         """
+        # Initialize visited set on first call to detect cycles
+        if visited is None:
+            visited = set()
+
+        # Cycle detection: if we've already visited this key, consider it valid
+        # to break the recursion (we haven't invalidated it yet in this traversal)
+        if key in visited:
+            return True
+
+        if key not in self._query_cache:
+            return False
+
+        visited.add(key)
+        entry = self._query_cache[key]
+
         # Check file dependencies
         for path, revision in entry.file_dependencies.items():
             current_revision = self._file_revisions.get(path, 0)
             if current_revision != revision:
                 return False
 
-        # Check query dependencies (recursively)
+        # Check query dependencies (recursively with cycle detection)
         for dep_key in entry.dependencies:
-            if dep_key not in self._query_cache:
-                return False
-            if not self._is_entry_valid(self._query_cache[dep_key]):
+            if not self._is_entry_valid(dep_key, visited):
                 return False
 
         return True

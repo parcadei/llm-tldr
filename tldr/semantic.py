@@ -15,6 +15,7 @@ and FAISS for fast vector similarity search.
 import json
 import os
 import sys
+import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List, Optional
@@ -22,6 +23,7 @@ from typing import List, Optional
 # Lazy imports for heavy dependencies
 _model = None
 _model_name = None  # Track which model is loaded
+_model_lock = threading.Lock()  # Thread safety for model singleton
 
 # Supported models with approximate download sizes
 SUPPORTED_MODELS = {
@@ -128,7 +130,7 @@ def _confirm_download(model_key: str) -> bool:
 
 
 def get_model(model_name: Optional[str] = None):
-    """Lazy-load the embedding model (cached).
+    """Lazy-load the embedding model (cached, thread-safe).
 
     Args:
         model_name: Model key from SUPPORTED_MODELS, or None for default.
@@ -153,20 +155,26 @@ def get_model(model_name: Optional[str] = None):
         # Allow arbitrary HuggingFace model names
         hf_name = model_name
 
-    # Return cached model if same
+    # Thread-safe model loading with double-checked locking
+    # First check without lock for fast path (model already loaded)
     if _model is not None and _model_name == hf_name:
         return _model
 
-    # Check if model needs downloading
-    if not _model_exists_locally(hf_name):
-        model_key = model_name if model_name in SUPPORTED_MODELS else None
-        if model_key and not _confirm_download(model_key):
-            raise ValueError(f"Model download declined. Use --model to choose a smaller model.")
+    with _model_lock:
+        # Re-check under lock to prevent race condition
+        if _model is not None and _model_name == hf_name:
+            return _model
 
-    from sentence_transformers import SentenceTransformer
-    _model = SentenceTransformer(hf_name)
-    _model_name = hf_name
-    return _model
+        # Check if model needs downloading (outside lock would cause UI issues)
+        if not _model_exists_locally(hf_name):
+            model_key = model_name if model_name in SUPPORTED_MODELS else None
+            if model_key and not _confirm_download(model_key):
+                raise ValueError("Model download declined. Use --model to choose a smaller model.")
+
+        from sentence_transformers import SentenceTransformer
+        _model = SentenceTransformer(hf_name)
+        _model_name = hf_name
+        return _model
 
 
 def build_embedding_text(unit: EmbeddingUnit) -> str:
@@ -429,7 +437,7 @@ def _parse_file_ast(file_path: Path, lang: str) -> dict:
         return result
 
     try:
-        content = file_path.read_text()
+        content = file_path.read_text(encoding="utf-8", errors="replace")
         lines = content.split('\n')
 
         if lang == "python":
@@ -450,8 +458,9 @@ def _parse_file_ast(file_path: Path, lang: str) -> dict:
                                         break
 
                     # Extract code preview (first 10 lines of body)
-                    start_line = node.lineno
-                    end_line = getattr(node, 'end_lineno', start_line + 10)
+                    # AST uses 1-indexed line numbers, Python lists are 0-indexed
+                    start_line = node.lineno - 1  # Convert to 0-indexed for list access
+                    end_line = getattr(node, 'end_lineno', node.lineno + 10)  # end_lineno is 1-indexed, works as exclusive slice bound
                     body_lines = lines[start_line:min(end_line, start_line + 10)]
                     code_preview = '\n'.join(body_lines[:10])
 
@@ -503,7 +512,7 @@ def _get_cfg_summary(file_path: Path, func_name: str, lang: str) -> str:
         return ""
 
     try:
-        content = file_path.read_text()
+        content = file_path.read_text(encoding="utf-8", errors="replace")
 
         if lang == "python":
             from tldr.cfg_extractor import extract_python_cfg
@@ -522,7 +531,7 @@ def _get_dfg_summary(file_path: Path, func_name: str, lang: str) -> str:
         return ""
 
     try:
-        content = file_path.read_text()
+        content = file_path.read_text(encoding="utf-8", errors="replace")
 
         if lang == "python":
             from tldr.dfg_extractor import extract_python_dfg
@@ -547,7 +556,7 @@ def _get_function_signature(file_path: Path, func_name: str, lang: str) -> Optio
         return None
 
     try:
-        content = file_path.read_text()
+        content = file_path.read_text(encoding="utf-8", errors="replace")
 
         if lang == "python":
             import ast
@@ -581,7 +590,7 @@ def _get_function_docstring(file_path: Path, func_name: str, lang: str) -> Optio
         return None
 
     try:
-        content = file_path.read_text()
+        content = file_path.read_text(encoding="utf-8", errors="replace")
 
         if lang == "python":
             import ast
@@ -702,19 +711,28 @@ def build_semantic_index(
         index = faiss.IndexFlatIP(dimension)
         index.add(embeddings_matrix)
 
-    # Save index
+    # Save index and metadata atomically using temp files + rename
+    # This prevents corruption if crash occurs between writes
     index_file = cache_dir / "index.faiss"
-    faiss.write_index(index, str(index_file))
+    metadata_file = cache_dir / "metadata.json"
+    temp_index = cache_dir / "index.faiss.tmp"
+    temp_metadata = cache_dir / "metadata.json.tmp"
 
-    # Save metadata with actual model used
+    # Prepare metadata
     metadata = {
         "units": [u.to_dict() for u in units],
         "model": hf_name,
         "dimension": dimension,
         "count": len(units),
     }
-    metadata_file = cache_dir / "metadata.json"
-    metadata_file.write_text(json.dumps(metadata, indent=2))
+
+    # Write to temp files first
+    faiss.write_index(index, str(temp_index))
+    temp_metadata.write_text(json.dumps(metadata, indent=2))
+
+    # Atomic rename (POSIX guarantees rename atomicity on same filesystem)
+    temp_index.rename(index_file)
+    temp_metadata.rename(metadata_file)
 
     if console:
         console.print(f"[bold green]✓[/] Indexed {len(units)} code units")
@@ -764,7 +782,7 @@ def semantic_search(
 
     # Load index and metadata
     index = faiss.read_index(str(index_file))
-    metadata = json.loads(metadata_file.read_text())
+    metadata = json.loads(metadata_file.read_text(encoding="utf-8"))
     units = metadata["units"]
 
     # Use model from metadata if not specified (ensures matching embeddings)

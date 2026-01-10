@@ -20,6 +20,7 @@ import logging
 import os
 import socket
 import sys
+import threading
 import time
 from pathlib import Path
 from typing import Any, Optional
@@ -29,6 +30,14 @@ from tldr.salsa import SalsaDB, salsa_query
 
 # Idle timeout: 30 minutes
 IDLE_TIMEOUT = 30 * 60
+
+# Maximum request size: 10MB - prevents OOM from malicious clients sending
+# infinite data without newline terminator
+MAX_REQUEST_SIZE = 10 * 1024 * 1024
+
+# Client socket timeout: 30 seconds - prevents indefinite blocking when
+# daemon hangs or becomes unresponsive
+CLIENT_SOCKET_TIMEOUT = 30.0
 
 logger = logging.getLogger(__name__)
 
@@ -116,9 +125,11 @@ def cached_structure(db: SalsaDB, project: str, language: str, max_results: int)
 @salsa_query
 def cached_context(db: SalsaDB, project: str, entry: str, language: str, depth: int) -> dict:
     """Cached relevant context - memoized by SalsaDB."""
+    from dataclasses import asdict
     from tldr.api import get_relevant_context
-    result = get_relevant_context(entry, project=project, language=language, depth=depth)
-    return {"status": "ok", "result": result}
+    result = get_relevant_context(project=project, entry_point=entry, language=language, depth=depth)
+    # Convert dataclass to dict for JSON serialization
+    return {"status": "ok", "result": asdict(result)}
 
 
 @salsa_query
@@ -188,6 +199,9 @@ class TLDRDaemon:
         self.salsa_db: SalsaDB = SalsaDB()
 
         # P6 Features: Dirty-count triggered semantic re-indexing
+        # Lock protects _dirty_count, _dirty_files, _reindex_in_progress
+        # These are accessed from main thread (notify handler) and background reindex thread
+        self._dirty_lock = threading.Lock()
         self._dirty_count: int = 0
         self._dirty_files: set[str] = set()
         self._reindex_in_progress: bool = False
@@ -737,28 +751,33 @@ class TLDRDaemon:
             self.notify_file_changed(file_path)
             return {"status": "ok", "semantic_enabled": False}
 
-        # Track dirty file
-        if file_path not in self._dirty_files:
-            self._dirty_files.add(file_path)
-            self._dirty_count += 1
-            logger.info(f"Dirty file tracked: {file_path} (count: {self._dirty_count})")
-
-        # Notify Salsa for cache invalidation
-        self.notify_file_changed(file_path)
-
-        # Check if we should trigger background re-indexing
+        # Track dirty file and check reindex threshold under lock
+        # Lock protects _dirty_files, _dirty_count, _reindex_in_progress from
+        # concurrent access by main thread and background reindex thread
         threshold = self._semantic_config.get("auto_reindex_threshold", 20)
-        should_reindex = (
-            self._dirty_count >= threshold
-            and not self._reindex_in_progress
-        )
+        with self._dirty_lock:
+            if file_path not in self._dirty_files:
+                self._dirty_files.add(file_path)
+                self._dirty_count += 1
+                logger.info(f"Dirty file tracked: {file_path} (count: {self._dirty_count})")
+
+            # Check if we should trigger background re-indexing
+            should_reindex = (
+                self._dirty_count >= threshold
+                and not self._reindex_in_progress
+            )
+            # Capture current count for response while holding lock
+            current_dirty_count = self._dirty_count
+
+        # Notify Salsa for cache invalidation (outside lock - no shared state)
+        self.notify_file_changed(file_path)
 
         if should_reindex:
             self._trigger_background_reindex()
 
         return {
             "status": "ok",
-            "dirty_count": self._dirty_count,
+            "dirty_count": current_dirty_count,
             "threshold": threshold,
             "reindex_triggered": should_reindex,
         }
@@ -768,19 +787,24 @@ class TLDRDaemon:
 
         Spawns a subprocess to rebuild the semantic index,
         allowing the daemon to continue serving requests.
-        """
-        if self._reindex_in_progress:
-            logger.info("Re-index already in progress, skipping")
-            return
 
-        self._reindex_in_progress = True
-        dirty_files = list(self._dirty_files)
+        Thread-safe: Uses _dirty_lock to prevent TOCTOU race on _reindex_in_progress.
+        """
+        import subprocess
+
+        # Atomic check-and-set under lock prevents TOCTOU race where two threads
+        # both pass the check before either sets the flag
+        with self._dirty_lock:
+            if self._reindex_in_progress:
+                logger.info("Re-index already in progress, skipping")
+                return
+            self._reindex_in_progress = True
+            dirty_files = list(self._dirty_files)
+
         logger.info(f"Triggering background semantic re-index for {len(dirty_files)} files")
 
         def do_reindex():
             try:
-                import subprocess
-
                 # Run semantic index command
                 cmd = [
                     sys.executable, "-m", "tldr.cli",
@@ -794,20 +818,20 @@ class TLDRDaemon:
                 )
 
                 if result.returncode == 0:
-                    logger.info(f"Background semantic re-index completed successfully")
+                    logger.info("Background semantic re-index completed successfully")
                 else:
                     logger.error(f"Background semantic re-index failed: {result.stderr}")
 
             except Exception as e:
                 logger.exception(f"Background semantic re-index error: {e}")
             finally:
-                # Reset dirty tracking
-                self._dirty_files.clear()
-                self._dirty_count = 0
-                self._reindex_in_progress = False
+                # Reset dirty tracking under lock
+                with self._dirty_lock:
+                    self._dirty_files.clear()
+                    self._dirty_count = 0
+                    self._reindex_in_progress = False
 
         # Run in thread to not block daemon
-        import threading
         thread = threading.Thread(target=do_reindex, daemon=True)
         thread.start()
 
@@ -940,9 +964,12 @@ class TLDRDaemon:
         use_git = command.get("git", False)
 
         # Get changed files from various sources
-        if use_session and self._dirty_files:
-            files = list(self._dirty_files)
-        elif use_git:
+        # Protect read of _dirty_files from concurrent modification by reindex thread
+        if use_session:
+            with self._dirty_lock:
+                if self._dirty_files:
+                    files = list(self._dirty_files)
+        if not files and use_git:
             try:
                 result = subprocess.run(
                     ["git", "diff", "--name-only", "HEAD"],
@@ -966,7 +993,17 @@ class TLDRDaemon:
         for file_path in files:
             if not file_path.endswith(".py"):
                 continue
-            full_path = self.project / file_path if not Path(file_path).is_absolute() else Path(file_path)
+            # Security: validate path is within project (prevent path traversal)
+            try:
+                if Path(file_path).is_absolute():
+                    full_path = Path(file_path)
+                else:
+                    full_path = (self.project / file_path).resolve()
+                # Check path is within project - raises ValueError if not
+                full_path.relative_to(self.project)
+            except ValueError:
+                logger.warning(f"Path traversal attempt blocked: {file_path}")
+                continue
             if not full_path.exists():
                 continue
 
@@ -979,10 +1016,11 @@ class TLDRDaemon:
                 logger.debug(f"Could not extract {file_path}: {e}")
 
         # Method 1: Call graph traversal - find tests that call changed functions
-        if changed_functions and self.call_graph:
+        call_graph = self.indexes.get("call_graph")
+        if changed_functions and call_graph:
             for func_name in changed_functions:
                 # Find callers of this function
-                for edge in self.call_graph.get("edges", []):
+                for edge in call_graph.get("edges", []):
                     if edge.get("to_func") == func_name:
                         caller_file = edge.get("from_file", "")
                         if "test" in caller_file.lower():
@@ -1054,31 +1092,46 @@ class TLDRDaemon:
 
     def write_pid_file(self):
         """Write daemon PID to .tldr/daemon.pid."""
-        self.tldr_dir.mkdir(parents=True, exist_ok=True)
-        pid_file = self.tldr_dir / "daemon.pid"
-        pid_file.write_text(str(os.getpid()))
-        logger.info(f"Wrote PID {os.getpid()} to {pid_file}")
+        try:
+            self.tldr_dir.mkdir(parents=True, exist_ok=True)
+            pid_file = self.tldr_dir / "daemon.pid"
+            pid_file.write_text(str(os.getpid()))
+            logger.info(f"Wrote PID {os.getpid()} to {pid_file}")
+        except (PermissionError, OSError) as e:
+            logger.warning(f"Failed to write PID file: {e}")
 
     def remove_pid_file(self):
         """Remove the PID file."""
-        pid_file = self.tldr_dir / "daemon.pid"
-        if pid_file.exists():
-            pid_file.unlink()
+        try:
+            pid_file = self.tldr_dir / "daemon.pid"
+            pid_file.unlink(missing_ok=True)
             logger.info(f"Removed PID file {pid_file}")
+        except (PermissionError, OSError) as e:
+            logger.warning(f"Failed to remove PID file: {e}")
 
     def write_status(self, status: str):
-        """Write status to .tldr/status file."""
-        self.tldr_dir.mkdir(parents=True, exist_ok=True)
-        status_file = self.tldr_dir / "status"
-        status_file.write_text(status)
-        self._status = status
-        logger.info(f"Status: {status}")
+        """Write status to .tldr/status file.
+
+        Note: This is called in finally blocks, so it must never raise.
+        """
+        try:
+            self.tldr_dir.mkdir(parents=True, exist_ok=True)
+            status_file = self.tldr_dir / "status"
+            status_file.write_text(status)
+            self._status = status
+            logger.info(f"Status: {status}")
+        except (PermissionError, OSError) as e:
+            logger.warning(f"Failed to write status file: {e}")
+            self._status = status  # Still update in-memory status
 
     def read_status(self) -> str:
         """Read status from .tldr/status file."""
         status_file = self.tldr_dir / "status"
-        if status_file.exists():
-            return status_file.read_text().strip()
+        try:
+            if status_file.exists() and status_file.is_file():
+                return status_file.read_text().strip()
+        except (PermissionError, OSError) as e:
+            logger.warning(f"Failed to read status file: {e}")
         return "unknown"
 
     def _create_socket(self):
@@ -1093,13 +1146,20 @@ class TLDRDaemon:
 
         Returns:
             Configured and bound socket ready for listening.
+
+        Raises:
+            RuntimeError: If socket binding fails.
         """
         if sys.platform == "win32":
             # TCP on localhost for Windows
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             addr, port = self._get_connection_info()
-            sock.bind((addr, port))
+            try:
+                sock.bind((addr, port))
+            except (PermissionError, OSError) as e:
+                sock.close()
+                raise RuntimeError(f"Failed to bind socket at {addr}:{port}: {e}")
             sock.listen(5)
             sock.settimeout(1.0)
             logger.info(f"Listening on {addr}:{port}")
@@ -1111,7 +1171,11 @@ class TLDRDaemon:
 
             sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
             sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            sock.bind(str(self.socket_path))
+            try:
+                sock.bind(str(self.socket_path))
+            except (PermissionError, OSError) as e:
+                sock.close()
+                raise RuntimeError(f"Failed to bind socket at {self.socket_path}: {e}")
             sock.listen(5)
             sock.settimeout(1.0)
             logger.info(f"Listening on {self.socket_path}")
@@ -1120,11 +1184,19 @@ class TLDRDaemon:
 
     def _cleanup_socket(self):
         """Clean up the socket."""
-        if self._socket:
-            self._socket.close()
+        try:
+            if self._socket:
+                self._socket.close()
+                self._socket = None
+        except OSError as e:
+            logger.warning(f"Error closing socket: {e}")
             self._socket = None
-        if self.socket_path.exists():
-            self.socket_path.unlink()
+
+        try:
+            self.socket_path.unlink(missing_ok=True)
+        except (PermissionError, OSError) as e:
+            logger.warning(f"Failed to remove socket file: {e}")
+
         logger.info("Socket cleaned up")
 
     def _handle_one_connection(self):
@@ -1142,15 +1214,29 @@ class TLDRDaemon:
         try:
             conn.settimeout(5.0)
             data = b""
+            size_exceeded = False
             while True:
                 chunk = conn.recv(4096)
                 if not chunk:
                     break
                 data += chunk
+                # Security: Prevent OOM from malicious clients sending infinite data
+                if len(data) > MAX_REQUEST_SIZE:
+                    size_exceeded = True
+                    logger.warning(
+                        f"Request size exceeded {MAX_REQUEST_SIZE} bytes, rejecting connection"
+                    )
+                    break
                 if b"\n" in data:
                     break
 
-            if data:
+            if size_exceeded:
+                response = {
+                    "status": "error",
+                    "message": f"Request too large: exceeds {MAX_REQUEST_SIZE} byte limit",
+                }
+                conn.sendall(json.dumps(response).encode() + b"\n")
+            elif data:
                 try:
                     command = json.loads(data.decode().strip())
                     response = self.handle_command(command)
@@ -1161,7 +1247,7 @@ class TLDRDaemon:
         except BrokenPipeError:
             # Client disconnected before receiving response - normal occurrence
             logger.debug("Client disconnected before receiving response")
-        except Exception as e:
+        except Exception:
             logger.exception("Error handling connection")
         finally:
             conn.close()
@@ -1187,7 +1273,7 @@ class TLDRDaemon:
 
         except KeyboardInterrupt:
             logger.info("Received interrupt, shutting down")
-        except Exception as e:
+        except Exception:
             logger.exception("Daemon error")
         finally:
             self._cleanup_socket()
@@ -1207,6 +1293,15 @@ def start_daemon(project_path: str | Path, foreground: bool = False):
     from .tldrignore import ensure_tldrignore
 
     project = Path(project_path).resolve()
+
+    # Check if daemon is already running
+    try:
+        result = query_daemon(project, {"cmd": "ping"})
+        if result.get("status") == "ok":
+            print("Daemon already running")
+            return
+    except (ConnectionRefusedError, FileNotFoundError, OSError, json.JSONDecodeError):
+        pass  # Daemon not running, proceed with start
 
     # Ensure .tldrignore exists (create with defaults if not)
     created, message = ensure_tldrignore(project)
@@ -1258,16 +1353,22 @@ def _create_client_socket(daemon: TLDRDaemon) -> socket.socket:
 
     Returns:
         Connected socket ready for communication
+
+    Note:
+        Socket has CLIENT_SOCKET_TIMEOUT set to prevent indefinite blocking
+        if daemon becomes unresponsive.
     """
     addr, port = daemon._get_connection_info()
 
     if port is not None:
         # TCP socket for Windows
         client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        client.settimeout(CLIENT_SOCKET_TIMEOUT)
         client.connect((addr, port))
     else:
         # Unix socket for Linux/macOS
         client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        client.settimeout(CLIENT_SOCKET_TIMEOUT)
         client.connect(addr)
 
     return client
@@ -1289,7 +1390,7 @@ def stop_daemon(project_path: str | Path) -> bool:
     try:
         client = _create_client_socket(daemon)
         client.sendall(json.dumps({"cmd": "shutdown"}).encode() + b"\n")
-        response = client.recv(4096)
+        client.recv(4096)  # Wait for response before closing
         client.close()
         return True
     except (ConnectionRefusedError, FileNotFoundError, OSError):
@@ -1306,6 +1407,10 @@ def query_daemon(project_path: str | Path, command: dict) -> dict:
 
     Returns:
         Response dict from daemon
+
+    Note:
+        Uses chunked reading to handle large responses that exceed
+        the initial recv buffer size.
     """
     project = Path(project_path).resolve()
     daemon = TLDRDaemon(project)
@@ -1313,7 +1418,15 @@ def query_daemon(project_path: str | Path, command: dict) -> dict:
     client = _create_client_socket(daemon)
     try:
         client.sendall(json.dumps(command).encode() + b"\n")
-        response = client.recv(65536)
+        # Read until newline (complete JSON response) using chunked reads
+        response = b""
+        while True:
+            chunk = client.recv(65536)
+            if not chunk:
+                break
+            response += chunk
+            if b"\n" in response:
+                break
         return json.loads(response.decode())
     finally:
         client.close()

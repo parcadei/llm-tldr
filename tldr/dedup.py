@@ -14,7 +14,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import List, Dict, Optional, Any
+from typing import List, Dict, Optional
 
 from tldr.patch import compute_file_hash, extract_edges_from_file, Edge
 
@@ -64,13 +64,20 @@ class ContentHashedIndex:
         # Check if we've seen this file before with different content
         old_hash = self._path_to_hash.get(file_path)
         if old_hash and old_hash != content_hash:
-            # Content changed - need to re-extract
-            pass
+            # Content changed - clean up old hash if no other files use it
+            other_users = [p for p, h in self._path_to_hash.items()
+                          if h == old_hash and p != file_path]
+            if not other_users and old_hash in self._by_hash:
+                del self._by_hash[old_hash]
         elif content_hash in self._by_hash:
-            # Content-hash cache hit - reuse existing edges
+            # Content-hash cache hit - reuse existing edges with remapped paths
             self._cache_hits += 1
             self._path_to_hash[file_path] = content_hash
-            return self._edges_from_tuples(self._by_hash[content_hash])
+            # Remap edge paths to current file (cached edges have original file's path)
+            cached_tuples = self._by_hash[content_hash]
+            remapped = [(file_path, func, file_path, target)
+                       for (_, func, _, target) in cached_tuples]
+            return self._edges_from_tuples(remapped)
 
         # Extract edges (new content or changed content)
         self._extractions += 1

@@ -374,7 +374,7 @@ def parse_imports(file_path: str | Path) -> list[dict]:
     """
     file_path = Path(file_path)
     try:
-        source = file_path.read_text()
+        source = file_path.read_text(encoding="utf-8", errors="replace")
         tree = ast.parse(source)
     except (SyntaxError, FileNotFoundError):
         return []
@@ -431,13 +431,15 @@ def parse_ts_imports(file_path: str | Path) -> list[dict]:
 
     imports = []
 
-    def walk_tree(node):
+    def walk_tree(node, depth=0, max_depth=500):
+        if depth > max_depth:
+            return
         if node.type == "import_statement":
             import_info = _parse_ts_import_node(node, source)
             if import_info:
                 imports.append(import_info)
         for child in node.children:
-            walk_tree(child)
+            walk_tree(child, depth + 1, max_depth)
 
     walk_tree(tree.root_node)
     return imports
@@ -515,11 +517,13 @@ def parse_go_imports(file_path: str | Path) -> list[dict]:
 
     imports = []
 
-    def walk_tree(node):
+    def walk_tree(node, depth=0, max_depth=500):
+        if depth > max_depth:
+            return
         if node.type == "import_declaration":
             _parse_go_import_node(node, source, imports)
         for child in node.children:
-            walk_tree(child)
+            walk_tree(child, depth + 1, max_depth)
 
     walk_tree(tree.root_node)
     return imports
@@ -579,7 +583,9 @@ def parse_rust_imports(file_path: str | Path) -> list[dict]:
 
     imports = []
 
-    def walk_tree(node):
+    def walk_tree(node, depth=0, max_depth=500):
+        if depth > max_depth:
+            return
         # Use declarations: use crate::utils::helper;
         if node.type == "use_declaration":
             import_info = _parse_rust_use_node(node, source)
@@ -605,7 +611,7 @@ def parse_rust_imports(file_path: str | Path) -> list[dict]:
                 })
 
         for child in node.children:
-            walk_tree(child)
+            walk_tree(child, depth + 1, max_depth)
 
     walk_tree(tree.root_node)
     return imports
@@ -679,13 +685,15 @@ def parse_java_imports(file_path: str | Path) -> list[dict]:
 
     imports = []
 
-    def walk_tree(node):
+    def walk_tree(node, depth=0, max_depth=500):
+        if depth > max_depth:
+            return
         if node.type == "import_declaration":
             import_info = _parse_java_import_node(node, source)
             if import_info:
                 imports.append(import_info)
         for child in node.children:
-            walk_tree(child)
+            walk_tree(child, depth + 1, max_depth)
 
     walk_tree(tree.root_node)
     return imports
@@ -755,7 +763,9 @@ def parse_kotlin_imports(file_path: str | Path) -> list[dict]:
 
     imports = []
 
-    def walk_tree(node):
+    def walk_tree(node, depth=0, max_depth=500):
+        if depth > max_depth:
+            return
         # tree-sitter-kotlin uses "import" node type, not "import_header"
         if node.type == "import":
             import_info = _parse_kotlin_import_node(node, source)
@@ -764,7 +774,7 @@ def parse_kotlin_imports(file_path: str | Path) -> list[dict]:
             # Don't recurse into import children (they have nested "import" keywords)
             return
         for child in node.children:
-            walk_tree(child)
+            walk_tree(child, depth + 1, max_depth)
 
     walk_tree(tree.root_node)
     return imports
@@ -859,13 +869,15 @@ def parse_scala_imports(file_path: str | Path) -> list[dict]:
 
     imports = []
 
-    def walk_tree(node):
+    def walk_tree(node, depth=0, max_depth=500):
+        if depth > max_depth:
+            return
         # Scala uses "import_declaration" for import statements
         if node.type == "import_declaration":
             import_infos = _parse_scala_import_node(node, source)
             imports.extend(import_infos)
         for child in node.children:
-            walk_tree(child)
+            walk_tree(child, depth + 1, max_depth)
 
     walk_tree(tree.root_node)
     return imports
@@ -965,13 +977,15 @@ def parse_c_imports(file_path: str | Path) -> list[dict]:
 
     imports = []
 
-    def walk_tree(node):
+    def walk_tree(node, depth=0, max_depth=500):
+        if depth > max_depth:
+            return
         if node.type == "preproc_include":
             import_info = _parse_c_include_node(node, source)
             if import_info:
                 imports.append(import_info)
         for child in node.children:
-            walk_tree(child)
+            walk_tree(child, depth + 1, max_depth)
 
     walk_tree(tree.root_node)
     return imports
@@ -1041,13 +1055,15 @@ def parse_cpp_imports(file_path: str | Path) -> list[dict]:
 
     imports = []
 
-    def walk_tree(node):
+    def walk_tree(node, depth=0, max_depth=500):
+        if depth > max_depth:
+            return
         if node.type == "preproc_include":
             import_info = _parse_cpp_include_node(node, source)
             if import_info:
                 imports.append(import_info)
         for child in node.children:
-            walk_tree(child)
+            walk_tree(child, depth + 1, max_depth)
 
     walk_tree(tree.root_node)
     return imports
@@ -1113,7 +1129,9 @@ def parse_ruby_imports(file_path: str | Path) -> list[dict]:
 
     imports = []
 
-    def walk_tree(node):
+    def walk_tree(node, depth=0, max_depth=500):
+        if depth > max_depth:
+            return
         # Ruby imports: require 'module' or require_relative 'module'
         # These are call nodes with method name "require" or "require_relative"
         if node.type == "call":
@@ -1121,7 +1139,7 @@ def parse_ruby_imports(file_path: str | Path) -> list[dict]:
             if import_info:
                 imports.append(import_info)
         for child in node.children:
-            walk_tree(child)
+            walk_tree(child, depth + 1, max_depth)
 
     walk_tree(tree.root_node)
     return imports
@@ -1201,7 +1219,9 @@ def parse_lua_imports(file_path: str | Path) -> list[dict]:
 
     imports = []
 
-    def walk_tree(node):
+    def walk_tree(node, depth=0, max_depth=500):
+        if depth > max_depth:
+            return
         # Lua imports are function calls: require("module"), dofile("path"), loadfile("path")
         if node.type == "function_call":
             import_info = _parse_lua_require_node(node, source)
@@ -1209,7 +1229,7 @@ def parse_lua_imports(file_path: str | Path) -> list[dict]:
                 imports.append(import_info)
 
         for child in node.children:
-            walk_tree(child)
+            walk_tree(child, depth + 1, max_depth)
 
     walk_tree(tree.root_node)
     return imports
@@ -1306,7 +1326,9 @@ def parse_elixir_imports(file_path: str | Path) -> list[dict]:
 
     imports = []
 
-    def walk_tree(node):
+    def walk_tree(node, depth=0, max_depth=500):
+        if depth > max_depth:
+            return
         # Elixir imports are call nodes with specific identifiers
         if node.type == "call":
             import_info = _parse_elixir_import_node(node, source)
@@ -1314,7 +1336,7 @@ def parse_elixir_imports(file_path: str | Path) -> list[dict]:
                 imports.append(import_info)
 
         for child in node.children:
-            walk_tree(child)
+            walk_tree(child, depth + 1, max_depth)
 
     walk_tree(tree.root_node)
     return imports
@@ -1419,7 +1441,9 @@ def parse_php_imports(file_path: str | Path) -> list[dict]:
 
     imports = []
 
-    def walk_tree(node):
+    def walk_tree(node, depth=0, max_depth=500):
+        if depth > max_depth:
+            return
         # use statements: use App\Models\User;
         if node.type == "namespace_use_declaration":
             _parse_php_use_node(node, source, imports)
@@ -1431,7 +1455,7 @@ def parse_php_imports(file_path: str | Path) -> list[dict]:
                 imports.append(import_info)
 
         for child in node.children:
-            walk_tree(child)
+            walk_tree(child, depth + 1, max_depth)
 
     walk_tree(tree.root_node)
     return imports
@@ -1559,13 +1583,15 @@ def parse_swift_imports(file_path: str | Path) -> list[dict]:
 
     imports = []
 
-    def walk_tree(node):
+    def walk_tree(node, depth=0, max_depth=500):
+        if depth > max_depth:
+            return
         if node.type == "import_declaration":
             import_info = _parse_swift_import_node(node, source)
             if import_info:
                 imports.append(import_info)
         for child in node.children:
-            walk_tree(child)
+            walk_tree(child, depth + 1, max_depth)
 
     walk_tree(tree.root_node)
     return imports
@@ -1647,13 +1673,15 @@ def parse_csharp_imports(file_path: str | Path) -> list[dict]:
 
     imports = []
 
-    def walk_tree(node):
+    def walk_tree(node, depth=0, max_depth=500):
+        if depth > max_depth:
+            return
         if node.type == "using_directive":
             import_info = _parse_csharp_using_node(node, source)
             if import_info:
                 imports.append(import_info)
         for child in node.children:
-            walk_tree(child)
+            walk_tree(child, depth + 1, max_depth)
 
     walk_tree(tree.root_node)
     return imports
@@ -1766,7 +1794,7 @@ def build_function_index(
 def _index_python_file(src_path: Path, rel_path: Path, module_name: str, simple_module: str, index: dict):
     """Index functions and classes from a Python file."""
     try:
-        source = src_path.read_text()
+        source = src_path.read_text(encoding="utf-8", errors="replace")
         tree = ast.parse(source)
     except (SyntaxError, FileNotFoundError):
         return
@@ -1806,11 +1834,13 @@ def _index_typescript_file(src_path: Path, rel_path: Path, module_name: str, sim
         index[f"{module_name}/{name}"] = str(rel_path)
         index[f"{simple_module}/{name}"] = str(rel_path)
 
-    def walk_tree(node):
+    def walk_tree(node, depth=0, max_depth=500):
+        if depth > max_depth:
+            return
         # Handle export statements - look inside them
         if node.type == "export_statement":
             for child in node.children:
-                walk_tree(child)
+                walk_tree(child, depth + 1, max_depth)
             return
 
         # Function declarations
@@ -1840,7 +1870,7 @@ def _index_typescript_file(src_path: Path, rel_path: Path, module_name: str, sim
                 add_to_index(name)
 
         for child in node.children:
-            walk_tree(child)
+            walk_tree(child, depth + 1, max_depth)
 
     walk_tree(tree.root_node)
 
@@ -1872,7 +1902,9 @@ def _index_go_file(src_path: Path, rel_path: Path, module_name: str, simple_modu
         index[f"{module_name}/{name}"] = str(rel_path)
         index[f"{simple_module}/{name}"] = str(rel_path)
 
-    def walk_tree(node):
+    def walk_tree(node, depth=0, max_depth=500):
+        if depth > max_depth:
+            return
         # Function declarations
         if node.type == "function_declaration":
             name = _get_go_node_name(node, source)
@@ -1898,7 +1930,7 @@ def _index_go_file(src_path: Path, rel_path: Path, module_name: str, simple_modu
                         add_to_index(name)
 
         for child in node.children:
-            walk_tree(child)
+            walk_tree(child, depth + 1, max_depth)
 
     walk_tree(tree.root_node)
 
@@ -1948,7 +1980,9 @@ def _index_rust_file(src_path: Path, rel_path: Path, module_name: str, simple_mo
         index[f"{module_name}.{name}"] = str(rel_path)
         index[f"{simple_module}.{name}"] = str(rel_path)
 
-    def walk_tree(node):
+    def walk_tree(node, depth=0, max_depth=500):
+        if depth > max_depth:
+            return
         # Function definitions
         if node.type == "function_item":
             name = _get_rust_node_name(node, source)
@@ -1993,7 +2027,7 @@ def _index_rust_file(src_path: Path, rel_path: Path, module_name: str, simple_mo
                                     add_to_index(f"{type_name}::{method_name}")
 
         for child in node.children:
-            walk_tree(child)
+            walk_tree(child, depth + 1, max_depth)
 
     walk_tree(tree.root_node)
 
@@ -2029,8 +2063,11 @@ def _index_java_file(src_path: Path, rel_path: Path, module_name: str, simple_mo
 
     current_class = None
 
-    def walk_tree(node):
+    def walk_tree(node, depth=0, max_depth=500):
         nonlocal current_class
+
+        if depth > max_depth:
+            return
 
         # Class declarations
         if node.type == "class_declaration":
@@ -2041,7 +2078,7 @@ def _index_java_file(src_path: Path, rel_path: Path, module_name: str, simple_mo
                 current_class = class_name
                 # Process class body
                 for child in node.children:
-                    walk_tree(child)
+                    walk_tree(child, depth + 1, max_depth)
                 current_class = old_class
                 return  # Already processed children
 
@@ -2067,7 +2104,7 @@ def _index_java_file(src_path: Path, rel_path: Path, module_name: str, simple_mo
                 add_to_index(name)
 
         for child in node.children:
-            walk_tree(child)
+            walk_tree(child, depth + 1, max_depth)
 
     walk_tree(tree.root_node)
 
@@ -2099,7 +2136,9 @@ def _index_c_file(src_path: Path, rel_path: Path, module_name: str, simple_modul
         index[f"{module_name}.{name}"] = str(rel_path)
         index[f"{simple_module}.{name}"] = str(rel_path)
 
-    def walk_tree(node):
+    def walk_tree(node, depth=0, max_depth=500):
+        if depth > max_depth:
+            return
         # Function definitions
         if node.type == "function_definition":
             name = _get_c_node_name(node, source)
@@ -2107,7 +2146,7 @@ def _index_c_file(src_path: Path, rel_path: Path, module_name: str, simple_modul
                 add_to_index(name)
 
         for child in node.children:
-            walk_tree(child)
+            walk_tree(child, depth + 1, max_depth)
 
     walk_tree(tree.root_node)
 
@@ -2199,7 +2238,7 @@ def _extract_file_calls(file_path: Path, root: Path) -> dict[str, list[tuple[str
         call_type is 'direct', 'attr', or 'intra'
     """
     try:
-        source = file_path.read_text()
+        source = file_path.read_text(encoding="utf-8", errors="replace")
         tree = ast.parse(source)
     except (SyntaxError, FileNotFoundError):
         return {}

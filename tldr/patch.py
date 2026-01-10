@@ -20,7 +20,6 @@ Usage:
 
 from __future__ import annotations
 
-import ast
 import hashlib
 from dataclasses import dataclass
 from pathlib import Path
@@ -90,11 +89,43 @@ def has_file_changed(file_path: str, cached_hash: str) -> bool:
         return True
 
 
+def _can_parse_file(file_path: Path, lang: str) -> bool:
+    """Check if a file can be parsed without syntax errors.
+
+    Args:
+        file_path: Path to the source file
+        lang: Language - "python", "typescript", "go", or "rust"
+
+    Returns:
+        True if file parses successfully, False on syntax error
+    """
+    import ast
+
+    try:
+        source = file_path.read_text(encoding="utf-8", errors="replace")
+    except (FileNotFoundError, IOError):
+        return False
+
+    if lang == "python":
+        try:
+            ast.parse(source)
+            return True
+        except SyntaxError:
+            return False
+    elif lang in ("typescript", "go", "rust"):
+        # For non-Python languages, we rely on the extractor's behavior
+        # These use tree-sitter which is more tolerant of partial parses
+        # Return True to attempt extraction (extractor will handle errors)
+        return True
+    else:
+        return False
+
+
 def extract_edges_from_file(
     file_path: str,
     lang: str = "python",
     project_root: Optional[str] = None
-) -> List[Edge]:
+) -> Optional[List[Edge]]:
     """Extract call edges from a single source file.
 
     Args:
@@ -103,9 +134,16 @@ def extract_edges_from_file(
         project_root: Optional project root for computing relative paths
 
     Returns:
-        List of Edge objects representing intra-file calls
+        List of Edge objects representing intra-file calls, or None if
+        extraction failed (e.g., syntax error). Empty list means file
+        has no calls (valid state).
     """
     path = Path(file_path)
+
+    # Pre-check: verify file can be parsed before extraction
+    # This catches syntax errors that extractors silently swallow
+    if not _can_parse_file(path, lang):
+        return None
 
     if project_root:
         root = Path(project_root)
@@ -134,7 +172,9 @@ def extract_edges_from_file(
         root_path = Path(project_root) if project_root else path.parent
         calls_by_func = extractor(path, root_path)
     except Exception:
-        return []
+        # Return None on extraction failure (syntax error, etc.)
+        # This signals to callers that they should preserve existing edges
+        return None
 
     edges = []
     for caller_func, calls in calls_by_func.items():
@@ -169,10 +209,13 @@ def patch_call_graph(
     """Incrementally update call graph for an edited file.
 
     This is the core incremental update algorithm:
-    1. Remove all edges where from_file == edited_file
-    2. Extract new edges from the edited file
+    1. Extract new edges from the edited file FIRST
+    2. Only if extraction succeeds, remove old edges from the graph
     3. Add new edges to the graph
     4. Return the updated graph
+
+    If extraction fails (syntax error, etc.), the graph is left unchanged
+    to preserve existing edges rather than losing all call information.
 
     Args:
         graph: Existing ProjectCallGraph to patch
@@ -192,26 +235,23 @@ def patch_call_graph(
     except ValueError:
         rel_path = edited_path.name
 
-    # Step 1: Remove all edges FROM the edited file
-    edges_to_remove = set()
-    for edge in graph.edges:
-        src_file, src_func, dst_file, dst_func = edge
-        if src_file == rel_path:
-            edges_to_remove.add(edge)
-
-    # Remove the edges (modify internal state)
-    graph._edges -= edges_to_remove
-
-    # Step 2: Extract new edges from the edited file
+    # Step 1: Extract new edges FIRST (before removing old)
+    # This ensures we don't lose edges if extraction fails
     new_edges = extract_edges_from_file(
         str(edited_file),
         lang=lang,
         project_root=project_root
     )
 
-    # Step 3: Add new edges to the graph
-    for edge in new_edges:
-        graph.add_edge(edge.from_file, edge.from_func, edge.to_file, edge.to_func)
+    # Step 2: Only remove old edges if extraction succeeded
+    # None means extraction failed (syntax error, etc.) - preserve old edges
+    if new_edges is not None:
+        edges_to_remove = {e for e in graph.edges if e[0] == rel_path}
+        graph._edges -= edges_to_remove
+
+        # Step 3: Add new edges to the graph
+        for edge in new_edges:
+            graph.add_edge(edge.from_file, edge.from_func, edge.to_file, edge.to_func)
 
     return graph
 

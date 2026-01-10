@@ -9,6 +9,7 @@ Usage:
 """
 
 import fcntl
+import functools
 import hashlib
 import json
 import socket
@@ -20,6 +21,25 @@ from pathlib import Path
 from mcp.server.fastmcp import FastMCP
 
 mcp = FastMCP("tldr-code")
+
+
+def mcp_error_handler(func):
+    """Decorator to wrap MCP tools with consistent error handling.
+
+    Catches RuntimeError (from daemon communication) and unexpected exceptions,
+    returning structured error responses instead of propagating exceptions.
+    """
+
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        try:
+            return func(*args, **kwargs)
+        except RuntimeError as e:
+            return {"status": "error", "message": str(e)}
+        except Exception as e:
+            return {"status": "error", "message": f"Unexpected error: {type(e).__name__}: {e}"}
+
+    return wrapper
 
 
 def _get_socket_path(project: str) -> Path:
@@ -74,12 +94,17 @@ def _ensure_daemon(project: str, timeout: float = 10.0) -> None:
                 socket_path.unlink(missing_ok=True)
 
             # Start daemon
-            subprocess.Popen(
-                [sys.executable, "-m", "tldr.cli", "daemon", "start", "--project", project],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                start_new_session=True,
-            )
+            try:
+                subprocess.Popen(
+                    [sys.executable, "-m", "tldr.cli", "daemon", "start", "--project", project],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    start_new_session=True,
+                )
+            except FileNotFoundError:
+                raise RuntimeError(f"Python executable not found: {sys.executable}")
+            except OSError as e:
+                raise RuntimeError(f"Failed to start TLDR daemon process: {e}")
 
             # Wait for daemon to be ready
             start = time.time()
@@ -94,9 +119,14 @@ def _ensure_daemon(project: str, timeout: float = 10.0) -> None:
 
 
 def _send_raw(project: str, command: dict) -> dict:
-    """Send command to daemon socket."""
+    """Send command to daemon socket.
+
+    Raises:
+        RuntimeError: With descriptive message for connection/communication failures.
+    """
     socket_path = _get_socket_path(project)
     sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    sock.settimeout(30.0)  # 30 second timeout to prevent hanging forever
     try:
         sock.connect(str(socket_path))
         sock.sendall(json.dumps(command).encode() + b"\n")
@@ -114,7 +144,22 @@ def _send_raw(project: str, command: dict) -> dict:
             except json.JSONDecodeError:
                 continue
 
-        return json.loads(b"".join(chunks))
+        # Final attempt to parse complete response
+        try:
+            return json.loads(b"".join(chunks))
+        except json.JSONDecodeError as e:
+            raise RuntimeError(f"Invalid JSON response from daemon: {e}")
+    except FileNotFoundError:
+        raise RuntimeError(f"TLDR daemon not running for {project} (socket not found)")
+    except ConnectionRefusedError:
+        raise RuntimeError(f"TLDR daemon refused connection for {project}")
+    except BrokenPipeError:
+        raise RuntimeError(f"TLDR daemon crashed during request for {project}")
+    except socket.timeout:
+        raise RuntimeError(f"TLDR daemon timed out (30s) for {project}")
+    except OSError as e:
+        # Catch other socket-related OS errors
+        raise RuntimeError(f"Socket error communicating with TLDR daemon: {e}")
     finally:
         sock.close()
 
@@ -129,6 +174,7 @@ def _send_command(project: str, command: dict) -> dict:
 
 
 @mcp.tool()
+@mcp_error_handler
 def tree(project: str = ".", extensions: list[str] | None = None) -> dict:
     """Get file tree structure for a project.
 
@@ -147,6 +193,7 @@ def tree(project: str = ".", extensions: list[str] | None = None) -> dict:
 
 
 @mcp.tool()
+@mcp_error_handler
 def structure(
     project: str = ".", language: str = "python", max_results: int = 100
 ) -> dict:
@@ -164,6 +211,7 @@ def structure(
 
 
 @mcp.tool()
+@mcp_error_handler
 def search(project: str, pattern: str, max_results: int = 100) -> dict:
     """Search files for a regex pattern.
 
@@ -178,6 +226,7 @@ def search(project: str, pattern: str, max_results: int = 100) -> dict:
 
 
 @mcp.tool()
+@mcp_error_handler
 def extract(file: str) -> dict:
     """Extract full code structure from a file.
 
@@ -194,6 +243,7 @@ def extract(file: str) -> dict:
 
 
 @mcp.tool()
+@mcp_error_handler
 def context(
     project: str, entry: str, depth: int = 2, language: str = "python"
 ) -> str:
@@ -228,6 +278,7 @@ def context(
 
 
 @mcp.tool()
+@mcp_error_handler
 def cfg(file: str, function: str, language: str = "python") -> dict:
     """Get control flow graph for a function.
 
@@ -246,6 +297,7 @@ def cfg(file: str, function: str, language: str = "python") -> dict:
 
 
 @mcp.tool()
+@mcp_error_handler
 def dfg(file: str, function: str, language: str = "python") -> dict:
     """Get data flow graph for a function.
 
@@ -264,6 +316,7 @@ def dfg(file: str, function: str, language: str = "python") -> dict:
 
 
 @mcp.tool()
+@mcp_error_handler
 def slice(
     file: str,
     function: str,
@@ -304,6 +357,7 @@ def slice(
 
 
 @mcp.tool()
+@mcp_error_handler
 def impact(project: str, function: str) -> dict:
     """Find all callers of a function (reverse call graph).
 
@@ -317,6 +371,7 @@ def impact(project: str, function: str) -> dict:
 
 
 @mcp.tool()
+@mcp_error_handler
 def dead(
     project: str,
     entry_points: list[str] | None = None,
@@ -336,6 +391,7 @@ def dead(
 
 
 @mcp.tool()
+@mcp_error_handler
 def arch(project: str, language: str = "python") -> dict:
     """Detect architectural layers from call patterns.
 
@@ -350,6 +406,7 @@ def arch(project: str, language: str = "python") -> dict:
 
 
 @mcp.tool()
+@mcp_error_handler
 def calls(project: str, language: str = "python") -> dict:
     """Build cross-file call graph for the project.
 
@@ -364,6 +421,7 @@ def calls(project: str, language: str = "python") -> dict:
 
 
 @mcp.tool()
+@mcp_error_handler
 def imports(file: str, language: str = "python") -> dict:
     """Parse imports from a source file.
 
@@ -378,6 +436,7 @@ def imports(file: str, language: str = "python") -> dict:
 
 
 @mcp.tool()
+@mcp_error_handler
 def importers(project: str, module: str, language: str = "python") -> dict:
     """Find all files that import a given module.
 
@@ -395,6 +454,7 @@ def importers(project: str, module: str, language: str = "python") -> dict:
 
 
 @mcp.tool()
+@mcp_error_handler
 def semantic(project: str, query: str, k: int = 10) -> dict:
     """Semantic code search using embeddings.
 
@@ -415,6 +475,7 @@ def semantic(project: str, query: str, k: int = 10) -> dict:
 
 
 @mcp.tool()
+@mcp_error_handler
 def diagnostics(path: str, language: str = "python") -> dict:
     """Get type and lint diagnostics.
 
@@ -431,6 +492,7 @@ def diagnostics(path: str, language: str = "python") -> dict:
 
 
 @mcp.tool()
+@mcp_error_handler
 def change_impact(project: str, files: list[str] | None = None) -> dict:
     """Find tests affected by changed files.
 
@@ -447,6 +509,7 @@ def change_impact(project: str, files: list[str] | None = None) -> dict:
 
 
 @mcp.tool()
+@mcp_error_handler
 def status(project: str = ".") -> dict:
     """Get daemon status including uptime and cache statistics.
 

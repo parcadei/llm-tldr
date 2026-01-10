@@ -1384,7 +1384,10 @@ def search(
 
     results = []
     root = Path(root)
-    compiled = re.compile(pattern)
+    try:
+        compiled = re.compile(pattern)
+    except re.error as e:
+        raise ValueError(f"Invalid regex pattern: {e}")
     files_scanned = 0
 
     for file_path in root.rglob("*"):
@@ -1519,6 +1522,9 @@ def get_code_structure(
             ]
         }
     """
+    # Security: Validate path containment to prevent directory traversal
+    _validate_path_containment(str(root))
+
     root = Path(root)
 
     # Get extension map for language

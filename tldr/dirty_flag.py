@@ -19,6 +19,7 @@ Usage:
     count = get_dirty_count(project_path)
 """
 
+import fcntl
 import json
 from datetime import datetime, timezone
 from pathlib import Path
@@ -52,6 +53,8 @@ def mark_dirty(project_path: Union[str, Path], edited_file: str) -> None:
 
     Creates or updates the dirty flag file with the edited file path.
     Multiple calls append to the list without duplicates.
+    Uses file locking to prevent TOCTOU race conditions when multiple
+    processes mark files dirty concurrently.
 
     Args:
         project_path: Root directory of the project
@@ -61,34 +64,47 @@ def mark_dirty(project_path: Union[str, Path], edited_file: str) -> None:
     normalized_file = _normalize_file_path(edited_file)
     now = _get_timestamp()
 
-    # Load existing data or create new
-    if dirty_path.exists():
-        try:
-            data = json.loads(dirty_path.read_text())
-        except (json.JSONDecodeError, IOError):
-            data = None
-    else:
-        data = None
-
-    if data is None:
-        data = {
-            "dirty_files": [],
-            "first_dirty_at": now,
-            "last_dirty_at": now,
-        }
-
-    # Add file if not already present
-    if normalized_file not in data["dirty_files"]:
-        data["dirty_files"].append(normalized_file)
-
-    # Update last_dirty_at
-    data["last_dirty_at"] = now
-
-    # Ensure parent directories exist
+    # Ensure parent directories exist before opening file
     dirty_path.parent.mkdir(parents=True, exist_ok=True)
 
-    # Write atomically
-    dirty_path.write_text(json.dumps(data, indent=2))
+    # Use file locking for atomicity - prevents concurrent processes from
+    # losing dirty markers due to read-modify-write race
+    with open(dirty_path, "a+") as f:
+        fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+        try:
+            # Read existing content
+            f.seek(0)
+            content = f.read()
+
+            # Parse existing data or create new
+            if content:
+                try:
+                    data = json.loads(content)
+                except json.JSONDecodeError:
+                    data = None
+            else:
+                data = None
+
+            if data is None:
+                data = {
+                    "dirty_files": [],
+                    "first_dirty_at": now,
+                    "last_dirty_at": now,
+                }
+
+            # Add file if not already present
+            if normalized_file not in data["dirty_files"]:
+                data["dirty_files"].append(normalized_file)
+
+            # Update last_dirty_at
+            data["last_dirty_at"] = now
+
+            # Write back atomically (truncate and rewrite)
+            f.seek(0)
+            f.truncate()
+            f.write(json.dumps(data, indent=2))
+        finally:
+            fcntl.flock(f.fileno(), fcntl.LOCK_UN)
 
 
 def is_dirty(project_path: Union[str, Path]) -> bool:
