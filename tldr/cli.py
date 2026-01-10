@@ -347,7 +347,7 @@ Semantic Search:
     warm_p.add_argument(
         "--background", action="store_true", help="Build in background process"
     )
-    warm_p.add_argument("--lang", default="python", help="Language")
+    warm_p.add_argument("--lang", default="python", help="Language (use 'all' for multi-language)")
 
     # tldr semantic index <path> / tldr semantic search <query>
     semantic_p = subparsers.add_parser(
@@ -766,11 +766,40 @@ Semantic Search:
                 print(f"Background indexing spawned for {project_path}")
             else:
                 # Build call graph
-                from .cross_file_calls import scan_project
+                from .cross_file_calls import scan_project, ProjectCallGraph
 
                 respect_ignore = not getattr(args, 'no_ignore', False)
-                files = scan_project(project_path, language=args.lang, respect_ignore=respect_ignore)
-                graph = build_project_call_graph(project_path, language=args.lang)
+                
+                # Determine languages to process
+                if args.lang == "all":
+                    try:
+                        from .semantic import _detect_project_languages
+                        target_languages = _detect_project_languages(project_path, respect_ignore=respect_ignore)
+                        print(f"Detected languages: {', '.join(target_languages)}")
+                    except ImportError:
+                        # Fallback if semantic module issue
+                        target_languages = ["python", "typescript", "javascript", "go", "rust"]
+                else:
+                    target_languages = [args.lang]
+
+                all_files = []
+                combined_edges = []
+                
+                for lang in target_languages:
+                    try:
+                        # Scan files
+                        files = scan_project(project_path, language=lang, respect_ignore=respect_ignore)
+                        all_files.extend(files)
+                        
+                        # Build graph
+                        graph = build_project_call_graph(project_path, language=lang)
+                        combined_edges.extend([
+                            {"from_file": e[0], "from_func": e[1], "to_file": e[2], "to_func": e[3]}
+                            for e in graph.edges
+                        ])
+                        print(f"Processed {lang}: {len(files)} files, {len(graph.edges)} edges")
+                    except Exception as e:
+                        print(f"Warning: Failed to process {lang}: {e}", file=sys.stderr)
 
                 # Create cache directory
                 cache_dir = project_path / ".tldr" / "cache"
@@ -779,16 +808,13 @@ Semantic Search:
                 # Save cache file
                 cache_file = cache_dir / "call_graph.json"
                 cache_data = {
-                    "edges": [
-                        {"from_file": e[0], "from_func": e[1], "to_file": e[2], "to_func": e[3]}
-                        for e in graph.edges
-                    ],
+                    "edges": combined_edges,
                     "timestamp": time.time(),
                 }
                 cache_file.write_text(json.dumps(cache_data, indent=2))
 
                 # Print stats
-                print(f"Indexed {len(files)} files, found {len(graph.edges)} edges")
+                print(f"Total: Indexed {len(all_files)} files, found {len(combined_edges)} edges")
 
         elif args.command == "semantic":
             from .semantic import build_semantic_index, semantic_search
