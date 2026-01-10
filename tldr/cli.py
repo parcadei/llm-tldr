@@ -18,6 +18,16 @@ import os
 import sys
 from pathlib import Path
 
+try:
+    # On Windows, the CLI entry point sometimes fails to load DLLs for tree-sitter
+    # unless we force-import the bindings early.
+    import tree_sitter
+    import tree_sitter_python
+    import tree_sitter_javascript
+    import tree_sitter_typescript
+except ImportError:
+    pass
+
 from . import __version__
 
 
@@ -348,7 +358,7 @@ Semantic Search:
     # tldr semantic index [path]
     index_p = semantic_sub.add_parser("index", help="Build semantic index for project")
     index_p.add_argument("path", nargs="?", default=".", help="Project root")
-    index_p.add_argument("--lang", default="python", help="Language")
+    index_p.add_argument("--lang", default="python", help="Language (use 'all' for multi-language)")
     index_p.add_argument(
         "--model",
         default=None,
@@ -969,76 +979,6 @@ Semantic Search:
                         print(f"Missing {missing_count} tool(s). Run: tldr doctor --install <lang>")
                     else:
                         print("All diagnostic tools installed!")
-
-        elif args.command == "daemon":
-            from .daemon import start_daemon, stop_daemon, query_daemon
-
-            project_path = Path(args.project).resolve()
-
-            if args.action == "start":
-                # Ensure .tldr directory exists
-                tldr_dir = project_path / ".tldr"
-                tldr_dir.mkdir(parents=True, exist_ok=True)
-                # Start daemon (will fork to background on Unix)
-                start_daemon(project_path, foreground=False)
-
-            elif args.action == "stop":
-                if stop_daemon(project_path):
-                    print("Daemon stopped")
-                else:
-                    print("Daemon not running")
-
-            elif args.action == "status":
-                try:
-                    result = query_daemon(project_path, {"cmd": "status"})
-                    print(f"Status: {result.get('status', 'unknown')}")
-                    if 'uptime' in result:
-                        uptime = int(result['uptime'])
-                        mins, secs = divmod(uptime, 60)
-                        hours, mins = divmod(mins, 60)
-                        print(f"Uptime: {hours}h {mins}m {secs}s")
-                except (ConnectionRefusedError, FileNotFoundError):
-                    print("Daemon not running")
-
-            elif args.action == "query":
-                try:
-                    result = query_daemon(project_path, {"cmd": args.cmd})
-                    print(json.dumps(result, indent=2))
-                except (ConnectionRefusedError, FileNotFoundError):
-                    print("Error: Daemon not running", file=sys.stderr)
-                    sys.exit(1)
-
-            elif args.action == "notify":
-                try:
-                    file_path = Path(args.file).resolve()
-                    result = query_daemon(project_path, {
-                        "cmd": "notify",
-                        "file": str(file_path)
-                    })
-                    if result.get("status") == "ok":
-                        dirty = result.get("dirty_count", 0)
-                        threshold = result.get("threshold", 20)
-                        if result.get("reindex_triggered"):
-                            print(f"Reindex triggered ({dirty}/{threshold} files)")
-                        else:
-                            print(f"Tracked: {dirty}/{threshold} files")
-                    else:
-                        print(f"Error: {result.get('message', 'Unknown error')}", file=sys.stderr)
-                        sys.exit(1)
-                except (ConnectionRefusedError, FileNotFoundError):
-                    # Daemon not running - silently ignore, file edits shouldn't fail
-                    pass
-
-    except FileNotFoundError as e:
-        print(f"Error: {e}", file=sys.stderr)
-        sys.exit(1)
-    except ValueError as e:
-        print(f"Error: {e}", file=sys.stderr)
-        sys.exit(1)
-    except Exception as e:
-        print(f"Error: {e}", file=sys.stderr)
-        sys.exit(1)
-
 
 if __name__ == "__main__":
     main()
