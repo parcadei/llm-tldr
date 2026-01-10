@@ -66,7 +66,35 @@ tldr warm /path/to/project
 tldr semantic "database connection pooling" .
 ```
 
-Embedding dependencies (`sentence-transformers`, `faiss-cpu`) are included with `pip install llm-tldr`. The index is cached in `.tldr/cache/semantic.faiss` and rebuilds automatically when code changes.
+Embedding dependencies (`sentence-transformers`, `faiss-cpu`) are included with `pip install llm-tldr`. The index is cached in `.tldr/cache/semantic.faiss`.
+
+### Keeping the Index Fresh
+
+The daemon tracks dirty files and auto-rebuilds after 20 changes, but you need to notify it when files change:
+
+```bash
+# Notify daemon of a changed file
+tldr daemon notify src/auth.py --project .
+```
+
+**Integration options:**
+
+1. **Git hook** (post-commit):
+   ```bash
+   git diff --name-only HEAD~1 | xargs -I{} tldr daemon notify {} --project .
+   ```
+
+2. **Editor hook** (on save):
+   ```bash
+   tldr daemon notify "$FILE" --project .
+   ```
+
+3. **Manual rebuild** (when needed):
+   ```bash
+   tldr warm .  # Full rebuild
+   ```
+
+The daemon auto-rebuilds semantic embeddings in the background once the dirty threshold (default: 20 files) is reached.
 
 ---
 
