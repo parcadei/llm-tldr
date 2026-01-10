@@ -459,6 +459,13 @@ Semantic Search:
         if cache_file.exists():
             try:
                 cache_data = json.loads(cache_file.read_text())
+                
+                # Validate cache language compatibility
+                cache_langs = cache_data.get("languages", [])
+                if cache_langs and lang not in cache_langs and lang != "all":
+                    # Cache was built with different languages; rebuild
+                    raise ValueError("Cache language mismatch")
+                
                 # Reconstruct graph from cache
                 graph = ProjectCallGraph()
                 for e in cache_data.get("edges", []):
@@ -479,6 +486,7 @@ Semantic Search:
                             {"from_file": e[0], "from_func": e[1], "to_file": e[2], "to_func": e[3]}
                             for e in graph.edges
                         ],
+                        "languages": cache_langs if cache_langs else [lang],
                         "timestamp": time.time(),
                     }
                     cache_file.write_text(json.dumps(cache_data, indent=2))
@@ -501,6 +509,7 @@ Semantic Search:
                 {"from_file": e[0], "from_func": e[1], "to_file": e[2], "to_func": e[3]}
                 for e in graph.edges
             ],
+            "languages": [lang],
             "timestamp": time.time(),
         }
         cache_file.write_text(json.dumps(cache_data, indent=2))
@@ -807,8 +816,12 @@ Semantic Search:
 
                 # Save cache file
                 cache_file = cache_dir / "call_graph.json"
+                # Deduplicate edges
+                unique_edges = list({(e["from_file"], e["from_func"], e["to_file"], e["to_func"]): e for e in combined_edges}.values())
+                
                 cache_data = {
-                    "edges": combined_edges,
+                    "edges": unique_edges,
+                    "languages": target_languages,
                     "timestamp": time.time(),
                 }
                 cache_file.write_text(json.dumps(cache_data, indent=2))

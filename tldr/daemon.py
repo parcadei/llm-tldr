@@ -542,6 +542,7 @@ class TLDRDaemon:
                     {"from_file": e[0], "from_func": e[1], "to_file": e[2], "to_func": e[3]}
                     for e in graph.edges
                 ],
+                "languages": [language],
                 "timestamp": time.time(),
             }
             cache_file.write_text(json.dumps(cache_data, indent=2))
