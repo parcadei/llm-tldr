@@ -506,8 +506,8 @@ Semantic Search:
                     clear_dirty(project)
 
                 return graph
-            except (json.JSONDecodeError, KeyError):
-                # Invalid cache, fall through to fresh build
+            except (json.JSONDecodeError, KeyError, ValueError):
+                # Invalid cache or language mismatch, fall through to fresh build
                 pass
 
         # No cache or invalid cache - do fresh build
@@ -802,14 +802,15 @@ Semantic Search:
                 else:
                     target_languages = [args.lang]
 
-                all_files = []
+                all_files = set()
                 combined_edges = []
+                processed_languages = []
                 
                 for lang in target_languages:
                     try:
                         # Scan files
                         files = scan_project(project_path, language=lang, respect_ignore=respect_ignore)
-                        all_files.extend(files)
+                        all_files.update(files)
                         
                         # Build graph
                         graph = build_project_call_graph(project_path, language=lang)
@@ -818,6 +819,7 @@ Semantic Search:
                             for e in graph.edges
                         ])
                         print(f"Processed {lang}: {len(files)} files, {len(graph.edges)} edges")
+                        processed_languages.append(lang)
                     except ValueError as e:
                         # Expected for unsupported languages
                         print(f"Warning: {lang}: {e}", file=sys.stderr)
@@ -839,13 +841,13 @@ Semantic Search:
                 
                 cache_data = {
                     "edges": unique_edges,
-                    "languages": target_languages,
+                    "languages": processed_languages if processed_languages else target_languages,
                     "timestamp": time.time(),
                 }
                 cache_file.write_text(json.dumps(cache_data, indent=2))
 
                 # Print stats
-                print(f"Total: Indexed {len(all_files)} files, found {len(combined_edges)} edges")
+                print(f"Total: Indexed {len(all_files)} files, found {len(unique_edges)} edges")
 
         elif args.command == "semantic":
             from .semantic import build_semantic_index, semantic_search
