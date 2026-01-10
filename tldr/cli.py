@@ -18,15 +18,16 @@ import os
 import sys
 from pathlib import Path
 
-try:
-    # On Windows, the CLI entry point sometimes fails to load DLLs for tree-sitter
-    # unless we force-import the bindings early.
-    import tree_sitter
-    import tree_sitter_python
-    import tree_sitter_javascript
-    import tree_sitter_typescript
-except ImportError:
-    pass
+# Fix for Windows: Explicitly import tree-sitter bindings early to prevent
+# silent DLL loading failures when running as a console script entry point.
+if os.name == 'nt':
+    try:
+        import tree_sitter
+        import tree_sitter_python
+        import tree_sitter_javascript
+        import tree_sitter_typescript
+    except ImportError:
+        pass
 
 from . import __version__
 
@@ -347,7 +348,12 @@ Semantic Search:
     warm_p.add_argument(
         "--background", action="store_true", help="Build in background process"
     )
-    warm_p.add_argument("--lang", default="python", help="Language (use 'all' for multi-language)")
+    warm_p.add_argument(
+        "--lang",
+        default="python",
+        choices=["python", "typescript", "javascript", "go", "rust", "java", "c", "cpp", "all"],
+        help="Language (use 'all' for multi-language)",
+    )
 
     # tldr semantic index <path> / tldr semantic search <query>
     semantic_p = subparsers.add_parser(
@@ -358,7 +364,12 @@ Semantic Search:
     # tldr semantic index [path]
     index_p = semantic_sub.add_parser("index", help="Build semantic index for project")
     index_p.add_argument("path", nargs="?", default=".", help="Project root")
-    index_p.add_argument("--lang", default="python", help="Language (use 'all' for multi-language)")
+    index_p.add_argument(
+        "--lang",
+        default="python",
+        choices=["python", "typescript", "javascript", "go", "rust", "java", "c", "cpp", "all"],
+        help="Language (use 'all' for multi-language)",
+    )
     index_p.add_argument(
         "--model",
         default=None,
@@ -807,8 +818,15 @@ Semantic Search:
                             for e in graph.edges
                         ])
                         print(f"Processed {lang}: {len(files)} files, {len(graph.edges)} edges")
+                    except ValueError as e:
+                        # Expected for unsupported languages
+                        print(f"Warning: {lang}: {e}", file=sys.stderr)
                     except Exception as e:
+                        # Unexpected error - show traceback if debug enabled
                         print(f"Warning: Failed to process {lang}: {e}", file=sys.stderr)
+                        if os.environ.get("TLDR_DEBUG"):
+                            import traceback
+                            traceback.print_exc()
 
                 # Create cache directory
                 cache_dir = project_path / ".tldr" / "cache"
