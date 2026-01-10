@@ -17,6 +17,7 @@ import os
 import sys
 import threading
 from dataclasses import dataclass, field
+from functools import lru_cache
 from pathlib import Path
 from typing import List, Optional
 
@@ -120,7 +121,7 @@ def _confirm_download(model_key: str) -> bool:
 
     print(f"\n⚠️  Semantic search requires embedding model: {hf_name}", file=sys.stderr)
     print(f"   Download size: {size}", file=sys.stderr)
-    print(f"   (Set TLDR_AUTO_DOWNLOAD=1 to skip this prompt)\n", file=sys.stderr)
+    print("   (Set TLDR_AUTO_DOWNLOAD=1 to skip this prompt)\n", file=sys.stderr)
 
     try:
         response = input("Continue with download? [Y/n] ").strip().lower()
@@ -268,7 +269,7 @@ def extract_units_from_project(project_path: str, lang: str = "python", respect_
     Returns:
         List of EmbeddingUnit objects with enriched metadata.
     """
-    from tldr.api import get_code_structure, build_project_call_graph, get_imports
+    from tldr.api import get_code_structure, build_project_call_graph
     from tldr.tldrignore import load_ignore_patterns, should_ignore
 
     project = Path(project_path).resolve()
@@ -315,29 +316,32 @@ def extract_units_from_project(project_path: str, lang: str = "python", respect_
         file_path = file_info.get("path", "")
         full_path = project / file_path
 
-        # Parse AST once per file for line numbers and code preview
-        ast_info = _parse_file_ast(full_path, lang)
+        # Parse AST once per file - extracts line numbers, code preview, signature, and docstring
+        # Returns (ast_info, file_content, ast_tree) for reuse by CFG/DFG functions
+        # This eliminates 4N+1 file reads: 1 read replaces N reads each for signature, docstring, CFG, DFG
+        ast_info, file_content, _ = _parse_file_ast(full_path, lang)
 
         # Get imports for dependencies (L5)
         dependencies = _get_file_dependencies(full_path, lang)
 
         # Process functions
         for func_name in file_info.get("functions", []):
-            # Get signature from file if possible
-            signature = _get_function_signature(full_path, func_name, lang)
-            docstring = _get_function_docstring(full_path, func_name, lang)
+            # Get pre-extracted data from single AST parse (eliminates redundant parsing)
+            func_data = ast_info.get("functions", {}).get(func_name, {})
+            signature = func_data.get("signature")
+            docstring = func_data.get("docstring")
 
             # Get line number from AST
-            line = ast_info.get("functions", {}).get(func_name, {}).get("line", 1)
+            line = func_data.get("line", 1)
 
-            # Get CFG summary (L3)
-            cfg_summary = _get_cfg_summary(full_path, func_name, lang)
+            # Get CFG summary (L3) - pass pre-read content to avoid file I/O
+            cfg_summary = _get_cfg_summary(full_path, func_name, lang, file_content)
 
-            # Get DFG summary (L4)
-            dfg_summary = _get_dfg_summary(full_path, func_name, lang)
+            # Get DFG summary (L4) - pass pre-read content to avoid file I/O
+            dfg_summary = _get_dfg_summary(full_path, func_name, lang, file_content)
 
-            # Get code preview
-            code_preview = ast_info.get("functions", {}).get(func_name, {}).get("code_preview", "")
+            # Get code preview from pre-extracted data
+            code_preview = func_data.get("code_preview", "")
 
             unit = EmbeddingUnit(
                 name=func_name,
@@ -366,8 +370,10 @@ def extract_units_from_project(project_path: str, lang: str = "python", respect_
                 class_name = class_info
                 methods = []
 
-            # Get class line number from AST
-            class_line = ast_info.get("classes", {}).get(class_name, {}).get("line", 1)
+            # Get pre-extracted class data from single AST parse
+            class_data = ast_info.get("classes", {}).get(class_name, {})
+            class_line = class_data.get("line", 1)
+            class_docstring = class_data.get("docstring") or ""
 
             # Add class itself
             unit = EmbeddingUnit(
@@ -378,7 +384,7 @@ def extract_units_from_project(project_path: str, lang: str = "python", respect_
                 language=lang,
                 unit_type="class",
                 signature=f"class {class_name}",
-                docstring="",
+                docstring=class_docstring,
                 calls=[],
                 called_by=[],
                 cfg_summary="",
@@ -391,13 +397,16 @@ def extract_units_from_project(project_path: str, lang: str = "python", respect_
             # Add methods
             for method in methods:
                 method_qualified = f"{class_name}.{method}"
-                # Look up method in AST (may be nested under class)
-                method_line = ast_info.get("methods", {}).get(f"{class_name}.{method}", {}).get("line", 1)
-                method_preview = ast_info.get("methods", {}).get(f"{class_name}.{method}", {}).get("code_preview", "")
+                # Get pre-extracted method data from single AST parse
+                method_data = ast_info.get("methods", {}).get(f"{class_name}.{method}", {})
+                method_line = method_data.get("line", 1)
+                method_preview = method_data.get("code_preview", "")
+                method_signature = method_data.get("signature") or f"def {method}(self, ...)"
+                method_docstring = method_data.get("docstring") or ""
 
-                # CFG/DFG for methods
-                cfg_summary = _get_cfg_summary(full_path, method, lang)
-                dfg_summary = _get_dfg_summary(full_path, method, lang)
+                # CFG/DFG for methods - pass pre-read content to avoid file I/O
+                cfg_summary = _get_cfg_summary(full_path, method, lang, file_content)
+                dfg_summary = _get_dfg_summary(full_path, method, lang, file_content)
 
                 unit = EmbeddingUnit(
                     name=method,
@@ -406,8 +415,8 @@ def extract_units_from_project(project_path: str, lang: str = "python", respect_
                     line=method_line,
                     language=lang,
                     unit_type="method",
-                    signature=f"def {method}(self, ...)",
-                    docstring="",
+                    signature=method_signature,
+                    docstring=method_docstring,
                     calls=calls_map.get(method, [])[:5],
                     called_by=called_by_map.get(method, [])[:5],
                     cfg_summary=cfg_summary,
@@ -420,42 +429,135 @@ def extract_units_from_project(project_path: str, lang: str = "python", respect_
     return units
 
 
-def _parse_file_ast(file_path: Path, lang: str) -> dict:
-    """Parse file AST to extract line numbers and code previews.
+def _build_parent_map(tree) -> dict:
+    """Build a mapping from each AST node to its parent in O(N) time.
+
+    Args:
+        tree: The root AST node.
 
     Returns:
-        Dict with structure:
-        {
-            "functions": {func_name: {"line": int, "code_preview": str}},
-            "classes": {class_name: {"line": int}},
-            "methods": {"ClassName.method": {"line": int, "code_preview": str}}
-        }
+        Dict mapping child nodes to their parent nodes.
     """
-    result = {"functions": {}, "classes": {}, "methods": {}}
+    import ast
+    parents = {}
+    for node in ast.walk(tree):
+        for child in ast.iter_child_nodes(node):
+            parents[child] = node
+    return parents
 
-    if not file_path.exists():
-        return result
+
+def _get_parent_class(node, parents: dict) -> str | None:
+    """Find the parent ClassDef name for a node, if any.
+
+    Walks up the parent chain to find if this node is directly
+    inside a class body (i.e., is a method).
+
+    Args:
+        node: The AST node to check.
+        parents: Parent map from _build_parent_map.
+
+    Returns:
+        Class name if node is a direct method of a class, None otherwise.
+    """
+    import ast
+    current = parents.get(node)
+    while current:
+        if isinstance(current, ast.ClassDef):
+            # Check if node is a direct child in the class body
+            if node in current.body:
+                return current.name
+            # Node is nested deeper (e.g., inside a nested function), not a direct method
+            return None
+        current = parents.get(current)
+    return None
+
+
+def _build_signature_from_node(node, lang: str) -> str:
+    """Build function signature string from AST node.
+
+    Extracts signature during single AST walk to avoid redundant parsing.
+
+    Args:
+        node: AST FunctionDef or AsyncFunctionDef node.
+        lang: Programming language.
+
+    Returns:
+        Signature string like "def func(arg1: int, arg2) -> str".
+    """
+    if lang != "python":
+        return f"function {node.name}(...)"
+
+    import ast
 
     try:
-        content = file_path.read_text(encoding="utf-8", errors="replace")
-        lines = content.split('\n')
+        args = []
+        for arg in node.args.args:
+            arg_str = arg.arg
+            if arg.annotation:
+                arg_str += f": {ast.unparse(arg.annotation)}"
+            args.append(arg_str)
 
+        returns = ""
+        if node.returns:
+            returns = f" -> {ast.unparse(node.returns)}"
+
+        prefix = "async def" if isinstance(node, ast.AsyncFunctionDef) else "def"
+        return f"{prefix} {node.name}({', '.join(args)}){returns}"
+    except Exception:
+        return f"def {node.name}(...)"
+
+
+def _parse_file_ast(file_path: Path, lang: str, content: Optional[str] = None) -> tuple:
+    """Parse file AST to extract line numbers, code previews, signatures, and docstrings.
+
+    Reads file content once and returns it along with parsed AST for reuse by callers,
+    eliminating redundant file I/O operations (reduces 4N+1 reads to 1 read per file).
+
+    Args:
+        file_path: Path to the source file.
+        lang: Programming language.
+        content: Optional pre-read file content to avoid redundant I/O.
+
+    Returns:
+        Tuple of (result_dict, content, ast_tree) where:
+        - result_dict: {
+            "functions": {func_name: {"line": int, "code_preview": str, "signature": str, "docstring": str|None}},
+            "classes": {class_name: {"line": int, "docstring": str|None}},
+            "methods": {"ClassName.method": {"line": int, "code_preview": str, "signature": str, "docstring": str|None}}
+          }
+        - content: File content (read once, reusable by callers)
+        - ast_tree: Parsed AST (for Python) or None (reusable by callers)
+
+    Performance: O(N) where N is number of AST nodes.
+    Uses parent map for efficient parent class lookup instead of nested ast.walk().
+    Extracts signature and docstring in the same pass to eliminate 2N redundant ast.parse() calls.
+    """
+    result = {"functions": {}, "classes": {}, "methods": {}}
+    ast_tree = None
+
+    # Read content only if not provided (single I/O per file)
+    if content is None:
+        if not file_path.exists():
+            return result, "", None
+        try:
+            content = file_path.read_text(encoding="utf-8", errors="replace")
+        except Exception:
+            return result, "", None
+
+    lines = content.split('\n')
+
+    try:
         if lang == "python":
             import ast
-            tree = ast.parse(content)
+            ast_tree = ast.parse(content)
 
-            for node in ast.walk(tree):
-                if isinstance(node, ast.FunctionDef) or isinstance(node, ast.AsyncFunctionDef):
-                    # Check if this is a method (inside a class)
-                    parent_class = None
-                    for potential_parent in ast.walk(tree):
-                        if isinstance(potential_parent, ast.ClassDef):
-                            if node in ast.walk(potential_parent) and node.name != potential_parent.name:
-                                # Check if node is a direct child method
-                                for item in potential_parent.body:
-                                    if item is node:
-                                        parent_class = potential_parent.name
-                                        break
+            # Build parent map in O(N) - replaces O(N^3) nested ast.walk() calls
+            parents = _build_parent_map(ast_tree)
+
+            for node in ast.walk(ast_tree):
+                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    # O(depth) parent lookup instead of O(N^2) nested walk
+                    parent_class = _get_parent_class(node, parents)
 
                     # Extract code preview (first 10 lines of body)
                     # AST uses 1-indexed line numbers, Python lists are 0-indexed
@@ -464,25 +566,34 @@ def _parse_file_ast(file_path: Path, lang: str) -> dict:
                     body_lines = lines[start_line:min(end_line, start_line + 10)]
                     code_preview = '\n'.join(body_lines[:10])
 
+                    # Extract signature and docstring in the same AST walk
+                    # This eliminates 2N redundant ast.parse() calls per file
+                    signature = _build_signature_from_node(node, lang)
+                    docstring = ast.get_docstring(node)
+
+                    func_data = {
+                        "line": node.lineno,
+                        "code_preview": code_preview,
+                        "signature": signature,
+                        "docstring": docstring,
+                    }
+
                     if parent_class:
-                        result["methods"][f"{parent_class}.{node.name}"] = {
-                            "line": node.lineno,
-                            "code_preview": code_preview
-                        }
+                        result["methods"][f"{parent_class}.{node.name}"] = func_data
                     else:
-                        result["functions"][node.name] = {
-                            "line": node.lineno,
-                            "code_preview": code_preview
-                        }
+                        result["functions"][node.name] = func_data
 
                 elif isinstance(node, ast.ClassDef):
-                    result["classes"][node.name] = {"line": node.lineno}
+                    result["classes"][node.name] = {
+                        "line": node.lineno,
+                        "docstring": ast.get_docstring(node),
+                    }
 
     except Exception:
-        # Return empty result on any parsing error
+        # Return empty result on any parsing error, but preserve content
         pass
 
-    return result
+    return result, content, ast_tree
 
 
 def _get_file_dependencies(file_path: Path, lang: str) -> str:
@@ -506,14 +617,27 @@ def _get_file_dependencies(file_path: Path, lang: str) -> str:
         return ""
 
 
-def _get_cfg_summary(file_path: Path, func_name: str, lang: str) -> str:
-    """Get CFG summary (complexity, block count) for a function."""
-    if not file_path.exists():
-        return ""
+def _get_cfg_summary(file_path: Path, func_name: str, lang: str, content: Optional[str] = None) -> str:
+    """Get CFG summary (complexity, block count) for a function.
+
+    Args:
+        file_path: Path to the source file.
+        func_name: Name of the function to analyze.
+        lang: Programming language.
+        content: Optional pre-read file content to avoid redundant I/O.
+
+    Returns:
+        CFG summary string (e.g., "complexity:3, blocks:5").
+    """
+    if content is None:
+        if not file_path.exists():
+            return ""
+        try:
+            content = file_path.read_text(encoding="utf-8", errors="replace")
+        except Exception:
+            return ""
 
     try:
-        content = file_path.read_text(encoding="utf-8", errors="replace")
-
         if lang == "python":
             from tldr.cfg_extractor import extract_python_cfg
             cfg = extract_python_cfg(content, func_name)
@@ -525,14 +649,27 @@ def _get_cfg_summary(file_path: Path, func_name: str, lang: str) -> str:
     return ""
 
 
-def _get_dfg_summary(file_path: Path, func_name: str, lang: str) -> str:
-    """Get DFG summary (variable count, def-use chains) for a function."""
-    if not file_path.exists():
-        return ""
+def _get_dfg_summary(file_path: Path, func_name: str, lang: str, content: Optional[str] = None) -> str:
+    """Get DFG summary (variable count, def-use chains) for a function.
+
+    Args:
+        file_path: Path to the source file.
+        func_name: Name of the function to analyze.
+        lang: Programming language.
+        content: Optional pre-read file content to avoid redundant I/O.
+
+    Returns:
+        DFG summary string (e.g., "vars:5, def-use chains:8").
+    """
+    if content is None:
+        if not file_path.exists():
+            return ""
+        try:
+            content = file_path.read_text(encoding="utf-8", errors="replace")
+        except Exception:
+            return ""
 
     try:
-        content = file_path.read_text(encoding="utf-8", errors="replace")
-
         if lang == "python":
             from tldr.dfg_extractor import extract_python_dfg
             dfg = extract_python_dfg(content, func_name)
@@ -550,30 +687,86 @@ def _get_dfg_summary(file_path: Path, func_name: str, lang: str) -> str:
     return ""
 
 
-def _get_function_signature(file_path: Path, func_name: str, lang: str) -> Optional[str]:
-    """Extract function signature from file."""
-    if not file_path.exists():
-        return None
+# Cached wrappers for CFG/DFG extraction to avoid repeated file I/O and parsing.
+# Uses string paths (hashable) as cache keys.
+# Cache size of 1000 handles typical project sizes; entries evicted LRU when exceeded.
+
+@lru_cache(maxsize=1000)
+def _get_cfg_summary_cached(file_path_str: str, func_name: str, lang: str) -> str:
+    """Cached version of CFG summary extraction.
+
+    Args:
+        file_path_str: String path to the file (must be string for hashability).
+        func_name: Name of the function to analyze.
+        lang: Programming language.
+
+    Returns:
+        CFG summary string (complexity and block count).
+    """
+    return _get_cfg_summary(Path(file_path_str), func_name, lang)
+
+
+@lru_cache(maxsize=1000)
+def _get_dfg_summary_cached(file_path_str: str, func_name: str, lang: str) -> str:
+    """Cached version of DFG summary extraction.
+
+    Args:
+        file_path_str: String path to the file (must be string for hashability).
+        func_name: Name of the function to analyze.
+        lang: Programming language.
+
+    Returns:
+        DFG summary string (variable count and def-use chains).
+    """
+    return _get_dfg_summary(Path(file_path_str), func_name, lang)
+
+
+def _get_function_signature(
+    file_path: Path,
+    func_name: str,
+    lang: str,
+    content: Optional[str] = None,
+    ast_tree=None,
+) -> Optional[str]:
+    """Extract function signature from file.
+
+    Args:
+        file_path: Path to the source file.
+        func_name: Name of the function to extract signature for.
+        lang: Programming language.
+        content: Optional pre-read file content to avoid redundant I/O.
+        ast_tree: Optional pre-parsed AST tree (for Python) to avoid redundant parsing.
+
+    Returns:
+        Function signature string or None if not found.
+    """
+    import ast as ast_module
+
+    if content is None:
+        if not file_path.exists():
+            return None
+        try:
+            content = file_path.read_text(encoding="utf-8", errors="replace")
+        except Exception:
+            return None
 
     try:
-        content = file_path.read_text(encoding="utf-8", errors="replace")
-
         if lang == "python":
-            import ast
-            tree = ast.parse(content)
-            for node in ast.walk(tree):
-                if isinstance(node, ast.FunctionDef) and node.name == func_name:
+            if ast_tree is None:
+                ast_tree = ast_module.parse(content)
+            for node in ast_module.walk(ast_tree):
+                if isinstance(node, ast_module.FunctionDef) and node.name == func_name:
                     # Build signature from args
                     args = []
                     for arg in node.args.args:
                         arg_str = arg.arg
                         if arg.annotation:
-                            arg_str += f": {ast.unparse(arg.annotation)}"
+                            arg_str += f": {ast_module.unparse(arg.annotation)}"
                         args.append(arg_str)
 
                     returns = ""
                     if node.returns:
-                        returns = f" -> {ast.unparse(node.returns)}"
+                        returns = f" -> {ast_module.unparse(node.returns)}"
 
                     return f"def {func_name}({', '.join(args)}){returns}"
 
@@ -584,20 +777,42 @@ def _get_function_signature(file_path: Path, func_name: str, lang: str) -> Optio
         return None
 
 
-def _get_function_docstring(file_path: Path, func_name: str, lang: str) -> Optional[str]:
-    """Extract function docstring from file."""
-    if not file_path.exists():
-        return None
+def _get_function_docstring(
+    file_path: Path,
+    func_name: str,
+    lang: str,
+    content: Optional[str] = None,
+    ast_tree=None,
+) -> Optional[str]:
+    """Extract function docstring from file.
+
+    Args:
+        file_path: Path to the source file.
+        func_name: Name of the function to extract docstring for.
+        lang: Programming language.
+        content: Optional pre-read file content to avoid redundant I/O.
+        ast_tree: Optional pre-parsed AST tree (for Python) to avoid redundant parsing.
+
+    Returns:
+        Function docstring or None if not found.
+    """
+    import ast as ast_module
+
+    if content is None:
+        if not file_path.exists():
+            return None
+        try:
+            content = file_path.read_text(encoding="utf-8", errors="replace")
+        except Exception:
+            return None
 
     try:
-        content = file_path.read_text(encoding="utf-8", errors="replace")
-
         if lang == "python":
-            import ast
-            tree = ast.parse(content)
-            for node in ast.walk(tree):
-                if isinstance(node, ast.FunctionDef) and node.name == func_name:
-                    return ast.get_docstring(node)
+            if ast_tree is None:
+                ast_tree = ast_module.parse(content)
+            for node in ast_module.walk(ast_tree):
+                if isinstance(node, ast_module.FunctionDef) and node.name == func_name:
+                    return ast_module.get_docstring(node)
 
         return None
 
@@ -642,7 +857,6 @@ def build_semantic_index(
         Number of indexed units.
     """
     import faiss
-    import numpy as np
     from tldr.tldrignore import ensure_tldrignore
 
     console = _get_progress_console() if show_progress else None
@@ -674,31 +888,20 @@ def build_semantic_index(
     if not units:
         return 0
 
-    # Build embeddings with progress
-    embeddings = []
-    if console:
-        from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TaskProgressColumn
-        with Progress(
-            SpinnerColumn(),
-            TextColumn("[bold green]{task.description}"),
-            BarColumn(),
-            TaskProgressColumn(),
-            console=console,
-        ) as progress:
-            task = progress.add_task("Computing embeddings...", total=len(units))
-            for unit in units:
-                text = build_embedding_text(unit)
-                embedding = compute_embedding(text, model_name=model)
-                embeddings.append(embedding)
-                progress.update(task, advance=1)
-    else:
-        for unit in units:
-            text = build_embedding_text(unit)
-            embedding = compute_embedding(text, model_name=model)
-            embeddings.append(embedding)
+    # Build all texts first for batch encoding
+    texts = [build_embedding_text(unit) for unit in units]
 
-    # Stack into matrix
-    embeddings_matrix = np.vstack(embeddings).astype(np.float32)
+    # Batch encode embeddings (10-50x faster than sequential)
+    # SentenceTransformers handles batching internally with optimal GPU utilization
+    model_obj = get_model(model)
+    if console:
+        console.print(f"[bold green]Computing embeddings for {len(texts)} units...")
+    embeddings_matrix = model_obj.encode(
+        texts,
+        batch_size=32,
+        normalize_embeddings=True,
+        show_progress_bar=show_progress and console is not None,
+    )
 
     # Build FAISS index (inner product for normalized vectors = cosine similarity)
     if console:
@@ -761,7 +964,6 @@ def semantic_search(
         List of result dictionaries with name, file, line, score, etc.
     """
     import faiss
-    import numpy as np
 
     # Handle empty query
     if not query or not query.strip():

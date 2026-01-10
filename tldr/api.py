@@ -14,7 +14,8 @@ Usage:
     # Returns LLM-ready string with call graph, signatures, complexity
 """
 
-from collections import defaultdict
+import functools
+from collections import defaultdict, deque
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
@@ -69,6 +70,7 @@ from .cfg_extractor import (
     extract_lua_cfg,
     extract_php_cfg,
     extract_python_cfg,
+    extract_python_cfgs_batch,
     extract_ruby_cfg,
     extract_rust_cfg,
     extract_scala_cfg,
@@ -367,6 +369,80 @@ def _resolve_source(source_or_path: str) -> tuple[str, str | None]:
     return source_or_path, None
 
 
+# =============================================================================
+# Call Graph Caching (Performance Optimization)
+# =============================================================================
+
+# Module-level cache for call graphs: {(project_path, language): (mtime, graph)}
+_call_graph_cache: dict[tuple[str, str], tuple[float, "CallGraphInfo"]] = {}
+
+
+def _get_project_mtime(project: Path, extensions: set[str]) -> float:
+    """Get latest mtime of source files in project for cache invalidation.
+
+    Only checks files with relevant extensions to avoid scanning irrelevant files.
+
+    Args:
+        project: Project root path
+        extensions: Set of file extensions to check (e.g., {".py"})
+
+    Returns:
+        Latest mtime as float, or 0.0 if no files found or errors occur.
+    """
+    latest = 0.0
+    try:
+        for f in project.rglob("*"):
+            if f.is_file() and f.suffix in extensions:
+                # Skip hidden directories
+                try:
+                    rel = f.relative_to(project)
+                    if any(p.startswith('.') for p in rel.parts):
+                        continue
+                except ValueError:
+                    continue
+                try:
+                    mtime = f.stat().st_mtime
+                    if mtime > latest:
+                        latest = mtime
+                except (OSError, PermissionError):
+                    pass
+    except (OSError, PermissionError):
+        pass
+    return latest
+
+
+def _get_cached_call_graph(
+    project: Path,
+    language: str,
+    extensions: set[str],
+) -> "CallGraphInfo":
+    """Get call graph with mtime-based caching.
+
+    Caches call graph per (project, language) and invalidates when any
+    source file has been modified since the cache was created.
+
+    Args:
+        project: Project root path
+        language: Programming language
+        extensions: Set of file extensions for this language
+
+    Returns:
+        CallGraphInfo from cache or freshly built.
+    """
+    cache_key = (str(project), language)
+    project_mtime = _get_project_mtime(project, extensions)
+
+    if cache_key in _call_graph_cache:
+        cached_mtime, cached_graph = _call_graph_cache[cache_key]
+        if cached_mtime >= project_mtime:
+            return cached_graph
+
+    # Cache miss or stale - rebuild
+    call_graph = build_project_call_graph(str(project), language=language)
+    _call_graph_cache[cache_key] = (project_mtime, call_graph)
+    return call_graph
+
+
 @dataclass
 class FunctionContext:
     """Context for a single function."""
@@ -517,6 +593,52 @@ def _get_module_exports(
     )
 
 
+# =============================================================================
+# Cached Project File Scanner
+# =============================================================================
+
+
+@functools.lru_cache(maxsize=32)
+def _cached_scan_project_files(project: str, language: str) -> tuple[str, ...]:
+    """Cached project file scan to avoid redundant rglob traversals.
+
+    Returns all source files for a given project and language, cached by
+    (project, language) pair. Uses tuple return for hashability.
+
+    Args:
+        project: Absolute path to project root (string for hashability)
+        language: Language identifier ("python", "typescript", "go", "rust")
+
+    Returns:
+        Tuple of absolute file paths matching the language's extensions
+    """
+    extensions = {
+        "python": {".py"},
+        "typescript": {".ts", ".tsx"},
+        "go": {".go"},
+        "rust": {".rs"},
+    }.get(language, {".py"})
+
+    project_path = Path(project)
+    result = []
+
+    for f in project_path.rglob("*"):
+        if not f.is_file():
+            continue
+        if f.suffix not in extensions:
+            continue
+        # Skip hidden directories
+        try:
+            rel = f.relative_to(project_path)
+            if any(part.startswith('.') for part in rel.parts):
+                continue
+        except ValueError:
+            continue
+        result.append(str(f))
+
+    return tuple(result)
+
+
 def get_relevant_context(
     project: str | Path,
     entry_point: str,
@@ -552,18 +674,16 @@ def get_relevant_context(
         "rust": ".rs"
     }.get(language, ".py")
 
-    # Search for module file matching entry_point
+    # Search for module file matching entry_point (using cached scan)
     if "." not in entry_point and "/" not in entry_point:
         module_file = None
-        for f in project.rglob(f"{entry_point}{ext_for_lang}"):
-            # Skip hidden dirs
-            try:
-                rel = f.relative_to(project)
-                if not any(p.startswith('.') for p in rel.parts):
-                    module_file = f
-                    break
-            except ValueError:
-                pass
+        cached_files = _cached_scan_project_files(str(project), language)
+        target_name = f"{entry_point}{ext_for_lang}"
+        for f_str in cached_files:
+            f = Path(f_str)
+            if f.name == target_name:
+                module_file = f
+                break
 
         if module_file:
             # Found a module file - return its exports as module query
@@ -571,13 +691,7 @@ def get_relevant_context(
             module_path = str(rel_path.with_suffix(''))  # Remove extension
             return _get_module_exports(project, module_path, language, include_docstrings)
 
-    # Build cross-file call graph
-    call_graph = build_project_call_graph(str(project), language=language)
-
-    # Index all signatures
-    extractor = HybridExtractor()
-    signatures: dict[str, tuple[str, FunctionInfo]] = {}  # func_name -> (file, info)
-
+    # Extension map for language (needed for caching and file scanning)
     ext_map = {
         "python": {".py"},
         "typescript": {".ts", ".tsx"},
@@ -586,53 +700,65 @@ def get_relevant_context(
     }
     extensions = ext_map.get(language, {".py"})
 
+    # Build cross-file call graph (cached with mtime invalidation)
+    call_graph = _get_cached_call_graph(project, language, extensions)
+
+    # Index all signatures (using cached file scan)
+    extractor = HybridExtractor()
+    signatures: dict[str, tuple[str, FunctionInfo]] = {}  # func_name -> (file, info)
+
     # Also cache file sources for CFG extraction
     file_sources: dict[str, str] = {}
 
-    for file_path in project.rglob("*"):
-        # Check for hidden paths relative to project root, not absolute path
+    # Use cached scan (already filters by extension and excludes hidden dirs)
+    cached_files = _cached_scan_project_files(str(project), language)
+    for file_path_str in cached_files:
+        file_path = Path(file_path_str)
         try:
-            rel_path = file_path.relative_to(project)
-            is_hidden = any(p.startswith('.') for p in rel_path.parts)
-        except ValueError:
-            is_hidden = False  # Not relative to project, allow it
-        if file_path.suffix in extensions and not is_hidden:
-            try:
-                source = file_path.read_text()
-                file_sources[str(file_path)] = source
+            source = file_path.read_text()
+            file_sources[file_path_str] = source
 
-                info = extractor.extract(str(file_path))
-                for func in info.functions:
-                    # Primary key: module.function (e.g., "claude_spawn.spawn_agent")
-                    module_name = file_path.stem  # "claude_spawn" from "claude_spawn.py"
-                    qualified_key = f"{module_name}.{func.name}"
-                    signatures[qualified_key] = (str(file_path), func)
+            info = extractor.extract(file_path_str)
+            for func in info.functions:
+                # Primary key: module.function (e.g., "claude_spawn.spawn_agent")
+                module_name = file_path.stem  # "claude_spawn" from "claude_spawn.py"
+                qualified_key = f"{module_name}.{func.name}"
+                signatures[qualified_key] = (file_path_str, func)
 
-                    # Also store unqualified for backward compat (first wins)
-                    if func.name not in signatures:
-                        signatures[func.name] = (str(file_path), func)
-                for cls in info.classes:
-                    # Index class itself as callable (dataclasses, constructors)
-                    # Create a pseudo-FunctionInfo for the class
-                    class_as_func = FunctionInfo(
-                        name=cls.name,
-                        params=[],  # Could extract __init__ params if needed
-                        return_type=cls.name,
-                        docstring=cls.docstring,
-                        line_number=cls.line_number,
-                    )
-                    signatures[cls.name] = (str(file_path), class_as_func)
+                # Also store unqualified for backward compat (first wins)
+                if func.name not in signatures:
+                    signatures[func.name] = (file_path_str, func)
+            for cls in info.classes:
+                # Index class itself as callable (dataclasses, constructors)
+                # Create a pseudo-FunctionInfo for the class
+                class_as_func = FunctionInfo(
+                    name=cls.name,
+                    params=[],  # Could extract __init__ params if needed
+                    return_type=cls.name,
+                    docstring=cls.docstring,
+                    line_number=cls.line_number,
+                )
+                signatures[cls.name] = (file_path_str, class_as_func)
 
-                    for method in cls.methods:
-                        # Store as ClassName.method
-                        key = f"{cls.name}.{method.name}"
-                        signatures[key] = (str(file_path), method)
-                        # Also store just method name (for call graph join)
-                        # Only if not already taken by a standalone function
-                        if method.name not in signatures:
-                            signatures[method.name] = (str(file_path), method)
-            except Exception:
-                pass  # Skip files that fail to parse
+                for method in cls.methods:
+                    # Store as ClassName.method
+                    key = f"{cls.name}.{method.name}"
+                    signatures[key] = (file_path_str, method)
+                    # Also store just method name (for call graph join)
+                    # Only if not already taken by a standalone function
+                    if method.name not in signatures:
+                        signatures[method.name] = (file_path_str, method)
+        except Exception:
+            pass  # Skip files that fail to parse
+
+    # Build suffix index for O(1) unqualified name lookup (avoids O(n) scan per lookup)
+    suffix_index: dict[str, list[str]] = defaultdict(list)
+    for qualified_name in signatures:
+        if "." in qualified_name:
+            _, short_name = qualified_name.rsplit(".", 1)
+            suffix_index[short_name].append(qualified_name)
+        else:
+            suffix_index[qualified_name].append(qualified_name)
 
     # CFG extractor based on language
     cfg_extractors = {
@@ -652,6 +778,43 @@ def get_relevant_context(
     }
     cfg_extractor_fn = cfg_extractors.get(language, extract_python_cfg)
 
+    # Lazy CFG cache: file_path -> dict[func_name, CFGInfo]
+    # Batch extracts all CFGs per file on first access (reduces O(N) parses to O(1))
+    cfg_cache: dict[str, dict[str, CFGInfo]] = {}
+
+    def get_cfg_cached(file_path: str, func_name: str) -> CFGInfo | None:
+        """Get CFG for a function, using batch extraction with per-file caching.
+
+        For Python, extracts all function CFGs in the file on first access.
+        For other languages, falls back to individual extraction (no batch support yet).
+        """
+        if file_path not in cfg_cache:
+            source = file_sources.get(file_path)
+            if not source:
+                cfg_cache[file_path] = {}
+            elif language == "python":
+                # Batch extract all CFGs for this file in one parse
+                cfg_cache[file_path] = extract_python_cfgs_batch(source)
+            else:
+                # Other languages: extract lazily per function
+                cfg_cache[file_path] = {}
+
+        # Return from cache (may be None if function not found)
+        cached_file_cfgs = cfg_cache[file_path]
+        if func_name in cached_file_cfgs:
+            return cached_file_cfgs[func_name]
+
+        # For non-Python: try individual extraction and cache result
+        if language != "python" and file_path in file_sources:
+            try:
+                cfg = cfg_extractor_fn(file_sources[file_path], func_name)
+                cached_file_cfgs[func_name] = cfg
+                return cfg
+            except Exception:
+                pass
+
+        return None
+
     # Build adjacency list from call graph edges
     # Edge format: (caller_file, caller_func, callee_file, callee_func)
     adjacency: dict[str, list[str]] = defaultdict(list)
@@ -661,25 +824,22 @@ def get_relevant_context(
 
     # BFS from entry point up to depth
     visited = set()
-    queue = [(entry_point, 0)]
+    queue = deque([(entry_point, 0)])  # O(1) popleft vs O(n) list.pop(0)
     result_functions = []
 
     # Helper to resolve function name to signature (handles qualified/unqualified)
     def resolve_func_name(name: str) -> list[tuple[str, tuple[str, FunctionInfo]]]:
         """Resolve function name, returning all matches for ambiguous names."""
-        # If qualified (has dot), do direct lookup
+        # If qualified (has dot), do direct lookup - O(1)
         if "." in name:
             if name in signatures:
                 return [(name, signatures[name])]
             return []
 
-        # Unqualified name - find all qualified matches
-        matches = [(k, v) for k, v in signatures.items()
-                   if k.endswith(f".{name}")]
-
-        if matches:
-            # Return all matches (could be 1 or more)
-            return matches
+        # Unqualified name - O(1) lookup via suffix index (was O(n) full scan)
+        qualified_names = suffix_index.get(name, [])
+        if qualified_names:
+            return [(qn, signatures[qn]) for qn in qualified_names]
         elif name in signatures:
             # Fall back to direct unqualified lookup
             return [(name, signatures[name])]
@@ -687,7 +847,7 @@ def get_relevant_context(
         return []
 
     while queue:
-        func_name, current_depth = queue.pop(0)
+        func_name, current_depth = queue.popleft()
 
         if func_name in visited or current_depth > depth:
             continue
@@ -702,19 +862,13 @@ def get_relevant_context(
                     continue
                 visited.add(resolved_name)
 
-                # Try to get CFG complexity
+                # Try to get CFG complexity (uses batch extraction with caching)
                 blocks = None
                 cyclomatic = None
-                # Use the actual function name from func_info for CFG lookup
-                cfg_func_name = func_info.name
-                if file_path in file_sources:
-                    try:
-                        cfg = cfg_extractor_fn(file_sources[file_path], cfg_func_name)
-                        if cfg and cfg.blocks:
-                            blocks = len(cfg.blocks)
-                            cyclomatic = cfg.cyclomatic_complexity
-                    except Exception:
-                        pass  # CFG extraction failed, skip
+                cfg = get_cfg_cached(file_path, func_info.name)
+                if cfg and cfg.blocks:
+                    blocks = len(cfg.blocks)
+                    cyclomatic = cfg.cyclomatic_complexity
 
                 ctx = FunctionContext(
                     name=resolved_name,  # Use qualified name for clarity

@@ -29,6 +29,7 @@ Example usage:
 from __future__ import annotations
 
 import functools
+import json
 import threading
 from dataclasses import dataclass, field
 from typing import (
@@ -110,17 +111,20 @@ class SalsaDB:
     - Query results and their dependencies
     - Reverse dependency graph for invalidation cascading
 
-    Thread-safe for concurrent access.
+    Thread-safe for concurrent access with fine-grained locking.
+    Lock is only held during cache access operations, NOT during query execution.
+    This allows multiple queries to execute concurrently without blocking each other.
     """
 
     def __init__(self):
         self._lock = threading.RLock()
+        self._thread_local = threading.local()  # Thread-local state for query tracking
 
-        # File storage
+        # File storage (shared, protected by lock)
         self._file_contents: Dict[str, str] = {}
         self._file_revisions: Dict[str, int] = {}
 
-        # Query cache: (func, args) -> CacheEntry
+        # Query cache: (func, args) -> CacheEntry (shared, protected by lock)
         self._query_cache: Dict[QueryKey, CacheEntry] = {}
 
         # Reverse dependencies: query_key -> set of dependent query_keys
@@ -129,14 +133,44 @@ class SalsaDB:
         # File to query dependencies: file_path -> set of query_keys
         self._file_to_queries: Dict[str, Set[QueryKey]] = {}
 
-        # Stats
+        # Stats (shared, protected by lock)
         self._stats = QueryStats()
 
-        # Active query stack for dependency tracking
-        self._query_stack: List[QueryKey] = []
+    # -------------------------------------------------------------------------
+    # Thread-local state accessors (no lock needed - per-thread)
+    # -------------------------------------------------------------------------
 
-        # Pending dependencies for queries currently being computed
-        self._pending_deps: Dict[QueryKey, Set[QueryKey]] = {}
+    @property
+    def _query_stack(self) -> List[QueryKey]:
+        """Thread-local query stack for dependency tracking.
+
+        Each thread has its own stack, so concurrent queries don't interfere.
+        """
+        if not hasattr(self._thread_local, "query_stack"):
+            self._thread_local.query_stack = []
+        return self._thread_local.query_stack
+
+    @property
+    def _pending_deps(self) -> Dict[QueryKey, Set[QueryKey]]:
+        """Thread-local pending dependencies for queries being computed.
+
+        Each thread tracks its own in-progress query dependencies.
+        """
+        if not hasattr(self._thread_local, "pending_deps"):
+            self._thread_local.pending_deps = {}
+        return self._thread_local.pending_deps
+
+    @property
+    def _file_reads(self) -> Dict[QueryKey, Dict[str, int]]:
+        """Thread-local tracker for file reads during query execution.
+
+        Maps query_key -> {path: revision} for files read during that query.
+        This captures revisions at read time (not store time), preventing
+        race conditions when files are modified during query execution.
+        """
+        if not hasattr(self._thread_local, "file_reads"):
+            self._thread_local.file_reads = {}
+        return self._thread_local.file_reads
 
     # -------------------------------------------------------------------------
     # File Management
@@ -164,6 +198,8 @@ class SalsaDB:
         """Get file content.
 
         If called during a query, registers the file as a dependency.
+        File revision is captured at read time in thread-local storage,
+        ensuring correct tracking even if another thread modifies the file.
 
         Args:
             path: File path
@@ -172,19 +208,29 @@ class SalsaDB:
             File content or None if not found
         """
         with self._lock:
+            content = self._file_contents.get(path)
+            revision = self._file_revisions.get(path, 0)
+
             # Track file dependency if in a query context
             if self._query_stack:
                 current_query = self._query_stack[-1]
+
+                # Track in thread-local file reads (captures revision at read time)
+                if current_query not in self._file_reads:
+                    self._file_reads[current_query] = {}
+                self._file_reads[current_query][path] = revision
+
+                # Track for invalidation (shared state)
                 if path not in self._file_to_queries:
                     self._file_to_queries[path] = set()
                 self._file_to_queries[path].add(current_query)
 
-                # Also track in the cache entry if it exists
+                # Also track in the cache entry if it exists (for re-reads)
                 if current_query in self._query_cache:
                     entry = self._query_cache[current_query]
-                    entry.file_dependencies[path] = self._file_revisions.get(path, 0)
+                    entry.file_dependencies[path] = revision
 
-            return self._file_contents.get(path)
+            return content
 
     def get_revision(self, path: str) -> int:
         """Get current revision number for a file.
@@ -205,6 +251,10 @@ class SalsaDB:
     def query(self, func: Callable[..., T], *args) -> T:
         """Execute a query with memoization and dependency tracking.
 
+        Uses fine-grained locking: lock is only held during cache access,
+        NOT during query execution. This allows concurrent query execution
+        without blocking.
+
         If the query result is cached and valid, returns cached result.
         Otherwise, computes the result and caches it.
 
@@ -214,72 +264,97 @@ class SalsaDB:
 
         Returns:
             Query result
+
+        Note:
+            Two threads computing the same query simultaneously will both
+            execute (acceptable for idempotent queries). The last to finish
+            wins the cache write - this is safe since queries are pure functions.
         """
         key = self._make_key(func, args)
 
+        # =====================================================================
+        # Phase 1: Check cache (with lock - fast operation)
+        # =====================================================================
         with self._lock:
-            # Check cache first
             if key in self._query_cache:
                 if self._is_entry_valid(key):
                     self._stats.cache_hits += 1
-                    # Still register dependency to parent even on cache hit
+                    # Register dependency to parent even on cache hit
                     self._register_dependency_to_parent(key)
                     return self._query_cache[key].result
 
             self._stats.cache_misses += 1
 
-            # Create a placeholder for collecting dependencies during execution
-            self._pending_deps[key] = set()
+        # =====================================================================
+        # Phase 2: Setup thread-local state (no lock needed - per-thread)
+        # =====================================================================
+        self._pending_deps[key] = set()
+        self._file_reads[key] = {}  # Will capture file revisions at read time
+        self._query_stack.append(key)
 
-            # Push onto query stack for dependency tracking
-            self._query_stack.append(key)
+        try:
+            # =================================================================
+            # Phase 3: Execute query (WITHOUT lock - slow operation!)
+            # This is the critical performance improvement: other queries
+            # can execute concurrently during this phase.
+            # =================================================================
+            if is_salsa_query(func):
+                original = getattr(func, "_original_func", func)
+                result = original(*args)
+            else:
+                result = func(*args)
 
-            try:
-                # Execute the query
-                if is_salsa_query(func):
-                    # Use original function to avoid wrapper overhead
-                    original = getattr(func, "_original_func", func)
-                    result = original(*args)
-                else:
-                    result = func(*args)
-
+            # =================================================================
+            # Phase 4: Store result (with lock - fast operation)
+            # =================================================================
+            with self._lock:
                 self._stats.recomputations += 1
 
-                # Create cache entry with collected dependencies
+                # Get file dependencies from thread-local tracker
+                # (captured at read time, not store time - prevents race conditions)
+                file_deps = self._file_reads.get(key, {}).copy()
+
                 entry = CacheEntry(
                     result=result,
                     dependencies=self._pending_deps.get(key, set()).copy(),
+                    file_dependencies=file_deps,
                 )
-
-                # Capture file dependencies
-                for path in list(self._file_to_queries.keys()):
-                    if key in self._file_to_queries.get(path, set()):
-                        entry.file_dependencies[path] = self._file_revisions.get(
-                            path, 0
-                        )
 
                 self._query_cache[key] = entry
 
-                # Register dependency to parent only on successful completion
-                # Must be inside try block to avoid registering failed queries
-                # as dependencies (which corrupts parent's validity check)
+                # Register dependency to parent (must be inside lock
+                # since it writes to shared state: _query_cache, _reverse_deps)
                 self._register_dependency_to_parent(key)
 
-                return result
+            return result
 
-            finally:
-                self._query_stack.pop()
+        finally:
+            # =================================================================
+            # Phase 5: Cleanup thread-local state (no lock needed)
+            # =================================================================
+            self._query_stack.pop()
 
-                # Clean up pending deps for this key
-                if key in self._pending_deps:
-                    del self._pending_deps[key]
+            if key in self._pending_deps:
+                del self._pending_deps[key]
+
+            if key in self._file_reads:
+                del self._file_reads[key]
 
     def _register_dependency_to_parent(self, child_key: QueryKey) -> None:
-        """Register a child query as a dependency of the current parent query."""
-        if not self._query_stack:
-            return
+        """Register a child query as a dependency of the current parent query.
 
-        parent_key = self._query_stack[-1]
+        The query stack contains all active queries with the current query at [-1].
+        The parent (caller) is at [-2]. We need at least 2 items on the stack
+        for a parent-child relationship to exist.
+        """
+        if len(self._query_stack) < 2:
+            return  # No parent exists (this is a top-level query)
+
+        parent_key = self._query_stack[-2]  # Parent is SECOND from top
+
+        # Guard against self-dependencies (defensive check)
+        if parent_key == child_key:
+            return
 
         # Track in pending deps (for queries still being computed)
         if hasattr(self, "_pending_deps") and parent_key in self._pending_deps:
@@ -314,14 +389,39 @@ class SalsaDB:
         return (func, tuple(hashable_args))
 
     def _to_hashable(self, obj: Any) -> Any:
-        """Convert an object to a hashable form."""
+        """Convert an object to a hashable form for cache key.
+
+        Uses JSON serialization as a fast path for large structures,
+        falling back to recursive tuple conversion for small ones.
+        """
         if isinstance(obj, dict):
+            # Fast path: JSON serialize for large dicts (>10 items)
+            if len(obj) > 10:
+                try:
+                    return ("__dict_hash__", hash(json.dumps(obj, sort_keys=True, default=str)))
+                except (TypeError, ValueError):
+                    pass
+            # Small dicts: use tuple approach for better debuggability
             return tuple(sorted((k, self._to_hashable(v)) for k, v in obj.items()))
-        elif isinstance(obj, list):
-            return tuple(self._to_hashable(x) for x in obj)
-        elif isinstance(obj, set):
-            return frozenset(self._to_hashable(x) for x in obj)
-        return obj
+
+        if isinstance(obj, (list, tuple)):
+            # Fast path: JSON serialize for large sequences (>100 items)
+            if len(obj) > 100:
+                try:
+                    return ("__seq_hash__", hash(json.dumps(obj, default=str)))
+                except (TypeError, ValueError):
+                    pass
+            return tuple(self._to_hashable(item) for item in obj)
+
+        if isinstance(obj, set):
+            return frozenset(self._to_hashable(item) for item in obj)
+
+        # Primitives: verify hashability, fallback to str representation
+        try:
+            hash(obj)
+            return obj
+        except TypeError:
+            return str(obj)
 
     def _is_entry_valid(
         self, key: QueryKey, visited: Optional[Set[QueryKey]] = None

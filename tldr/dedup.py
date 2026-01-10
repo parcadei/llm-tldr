@@ -37,6 +37,9 @@ class ContentHashedIndex:
     # {absolute_file_path: content_hash}
     _path_to_hash: Dict[str, str] = field(default_factory=dict)
 
+    # {content_hash: set of file paths} - reverse index for O(1) orphan detection
+    _hash_to_paths: Dict[str, set] = field(default_factory=dict)
+
     # Stats tracking
     _extractions: int = field(default=0)
     _cache_hits: int = field(default=0)
@@ -64,15 +67,22 @@ class ContentHashedIndex:
         # Check if we've seen this file before with different content
         old_hash = self._path_to_hash.get(file_path)
         if old_hash and old_hash != content_hash:
-            # Content changed - clean up old hash if no other files use it
-            other_users = [p for p, h in self._path_to_hash.items()
-                          if h == old_hash and p != file_path]
-            if not other_users and old_hash in self._by_hash:
-                del self._by_hash[old_hash]
+            # Content changed - remove from old reverse index
+            if old_hash in self._hash_to_paths:
+                self._hash_to_paths[old_hash].discard(file_path)
+                # O(1) orphan check: clean up if no other files use this hash
+                if not self._hash_to_paths[old_hash]:
+                    del self._hash_to_paths[old_hash]
+                    if old_hash in self._by_hash:
+                        del self._by_hash[old_hash]
         elif content_hash in self._by_hash:
             # Content-hash cache hit - reuse existing edges with remapped paths
             self._cache_hits += 1
             self._path_to_hash[file_path] = content_hash
+            # Maintain reverse index for O(1) orphan detection
+            if content_hash not in self._hash_to_paths:
+                self._hash_to_paths[content_hash] = set()
+            self._hash_to_paths[content_hash].add(file_path)
             # Remap edge paths to current file (cached edges have original file's path)
             cached_tuples = self._by_hash[content_hash]
             remapped = [(file_path, func, file_path, target)
@@ -87,6 +97,11 @@ class ContentHashedIndex:
         edge_tuples = [e.to_tuple() for e in edges]
         self._by_hash[content_hash] = edge_tuples
         self._path_to_hash[file_path] = content_hash
+
+        # Maintain reverse index for O(1) orphan detection
+        if content_hash not in self._hash_to_paths:
+            self._hash_to_paths[content_hash] = set()
+        self._hash_to_paths[content_hash].add(file_path)
 
         return edges
 
@@ -148,7 +163,7 @@ class ContentHashedIndex:
             }
         }
 
-        index_file.write_text(json.dumps(data, indent=2))
+        index_file.write_text(json.dumps(data, separators=(',', ':')))
 
     def load(self) -> bool:
         """Load index from disk.
@@ -176,6 +191,13 @@ class ContentHashedIndex:
         for rel_path, hash_val in rel_path_to_hash.items():
             abs_path = str(root / rel_path)
             self._path_to_hash[abs_path] = hash_val
+
+        # Rebuild reverse index from path_to_hash for O(1) orphan detection
+        self._hash_to_paths = {}
+        for abs_path, hash_val in self._path_to_hash.items():
+            if hash_val not in self._hash_to_paths:
+                self._hash_to_paths[hash_val] = set()
+            self._hash_to_paths[hash_val].add(abs_path)
 
         stats = data.get("stats", {})
         self._extractions = stats.get("extractions", 0)

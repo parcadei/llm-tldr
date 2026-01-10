@@ -17,6 +17,7 @@ Key functions:
 import ast
 import os
 from dataclasses import dataclass, field
+from functools import lru_cache
 from pathlib import Path
 from typing import Iterator, Optional
 
@@ -133,16 +134,63 @@ try:
 except ImportError:
     pass
 
+# Module-level parser cache to avoid expensive parser recreation per file.
+# Creating a tree-sitter parser takes ~10-50ms. For a 100-file project,
+# caching saves 1-5 seconds of parser creation time.
+_PARSER_CACHE: dict[str, "tree_sitter.Parser"] = {}
+
 
 @dataclass
 class ProjectCallGraph:
-    """Cross-file call graph with edges as (src_file, src_func, dst_file, dst_func)."""
+    """Cross-file call graph with edges as (src_file, src_func, dst_file, dst_func).
+
+    Maintains a secondary index (_edges_by_src_file) for O(1) edge removal by file,
+    critical for incremental patching performance.
+    """
 
     _edges: set[tuple[str, str, str, str]] = field(default_factory=set)
+    # Secondary index: src_file -> set of edges originating from that file
+    # Enables O(1) edge lookup/removal instead of O(E) full scan
+    _edges_by_src_file: dict[str, set[tuple[str, str, str, str]]] = field(default_factory=dict)
 
     def add_edge(self, src_file: str, src_func: str, dst_file: str, dst_func: str):
-        """Add a call edge from src_file:src_func to dst_file:dst_func."""
-        self._edges.add((src_file, src_func, dst_file, dst_func))
+        """Add a call edge from src_file:src_func to dst_file:dst_func.
+
+        Maintains both primary edge set and secondary index for O(1) operations.
+        """
+        edge = (src_file, src_func, dst_file, dst_func)
+        self._edges.add(edge)
+        # Maintain secondary index
+        if src_file not in self._edges_by_src_file:
+            self._edges_by_src_file[src_file] = set()
+        self._edges_by_src_file[src_file].add(edge)
+
+    def remove_edges_for_file(self, src_file: str) -> int:
+        """Remove all edges originating from a source file in O(1).
+
+        Args:
+            src_file: Relative path to the source file
+
+        Returns:
+            Number of edges removed
+        """
+        if src_file not in self._edges_by_src_file:
+            return 0
+
+        edges_to_remove = self._edges_by_src_file.pop(src_file)
+        self._edges -= edges_to_remove
+        return len(edges_to_remove)
+
+    def get_edges_for_file(self, src_file: str) -> set[tuple[str, str, str, str]]:
+        """Get all edges originating from a source file in O(1).
+
+        Args:
+            src_file: Relative path to the source file
+
+        Returns:
+            Set of edges (possibly empty) from that file
+        """
+        return self._edges_by_src_file.get(src_file, set()).copy()
 
     @property
     def edges(self) -> set[tuple[str, str, str, str]]:
@@ -155,123 +203,135 @@ class ProjectCallGraph:
 
 
 def _get_ts_parser():
-    """Get or create a tree-sitter TypeScript parser."""
+    """Get or create a cached tree-sitter TypeScript parser."""
     if not TREE_SITTER_AVAILABLE:
         raise RuntimeError("tree-sitter-typescript not available")
 
-    ts_lang = tree_sitter.Language(tree_sitter_typescript.language_typescript())
-    parser = tree_sitter.Parser(ts_lang)
-    return parser
+    if "typescript" not in _PARSER_CACHE:
+        ts_lang = tree_sitter.Language(tree_sitter_typescript.language_typescript())
+        _PARSER_CACHE["typescript"] = tree_sitter.Parser(ts_lang)
+    return _PARSER_CACHE["typescript"]
 
 
 def _get_rust_parser():
-    """Get or create a tree-sitter Rust parser."""
+    """Get or create a cached tree-sitter Rust parser."""
     if not TREE_SITTER_RUST_AVAILABLE:
         raise RuntimeError("tree-sitter-rust not available")
 
-    rust_lang = tree_sitter.Language(tree_sitter_rust.language())
-    parser = tree_sitter.Parser(rust_lang)
-    return parser
+    if "rust" not in _PARSER_CACHE:
+        rust_lang = tree_sitter.Language(tree_sitter_rust.language())
+        _PARSER_CACHE["rust"] = tree_sitter.Parser(rust_lang)
+    return _PARSER_CACHE["rust"]
 
 
 def _get_go_parser():
-    """Get or create a tree-sitter Go parser."""
+    """Get or create a cached tree-sitter Go parser."""
     if not TREE_SITTER_GO_AVAILABLE:
         raise RuntimeError("tree-sitter-go not available")
 
-    go_lang = tree_sitter.Language(tree_sitter_go.language())
-    parser = tree_sitter.Parser(go_lang)
-    return parser
+    if "go" not in _PARSER_CACHE:
+        go_lang = tree_sitter.Language(tree_sitter_go.language())
+        _PARSER_CACHE["go"] = tree_sitter.Parser(go_lang)
+    return _PARSER_CACHE["go"]
 
 
 def _get_java_parser():
-    """Get or create a tree-sitter Java parser."""
+    """Get or create a cached tree-sitter Java parser."""
     if not TREE_SITTER_JAVA_AVAILABLE:
         raise RuntimeError("tree-sitter-java not available")
 
-    java_lang = tree_sitter.Language(tree_sitter_java.language())
-    parser = tree_sitter.Parser(java_lang)
-    return parser
+    if "java" not in _PARSER_CACHE:
+        java_lang = tree_sitter.Language(tree_sitter_java.language())
+        _PARSER_CACHE["java"] = tree_sitter.Parser(java_lang)
+    return _PARSER_CACHE["java"]
 
 
 def _get_c_parser():
-    """Get or create a tree-sitter C parser."""
+    """Get or create a cached tree-sitter C parser."""
     if not TREE_SITTER_C_AVAILABLE:
         raise RuntimeError("tree-sitter-c not available")
 
-    c_lang = tree_sitter.Language(tree_sitter_c.language())
-    parser = tree_sitter.Parser(c_lang)
-    return parser
+    if "c" not in _PARSER_CACHE:
+        c_lang = tree_sitter.Language(tree_sitter_c.language())
+        _PARSER_CACHE["c"] = tree_sitter.Parser(c_lang)
+    return _PARSER_CACHE["c"]
 
 
 def _get_ruby_parser():
-    """Get or create a tree-sitter Ruby parser."""
+    """Get or create a cached tree-sitter Ruby parser."""
     if not TREE_SITTER_RUBY_AVAILABLE:
         raise RuntimeError("tree-sitter-ruby not available")
 
-    ruby_lang = tree_sitter.Language(tree_sitter_ruby.language())
-    parser = tree_sitter.Parser(ruby_lang)
-    return parser
+    if "ruby" not in _PARSER_CACHE:
+        ruby_lang = tree_sitter.Language(tree_sitter_ruby.language())
+        _PARSER_CACHE["ruby"] = tree_sitter.Parser(ruby_lang)
+    return _PARSER_CACHE["ruby"]
 
 
 def _get_php_parser():
-    """Get or create a tree-sitter PHP parser."""
+    """Get or create a cached tree-sitter PHP parser."""
     if not TREE_SITTER_PHP_AVAILABLE:
         raise RuntimeError("tree-sitter-php not available")
 
-    php_lang = tree_sitter.Language(tree_sitter_php.language_php())
-    parser = tree_sitter.Parser(php_lang)
-    return parser
+    if "php" not in _PARSER_CACHE:
+        php_lang = tree_sitter.Language(tree_sitter_php.language_php())
+        _PARSER_CACHE["php"] = tree_sitter.Parser(php_lang)
+    return _PARSER_CACHE["php"]
 
 
 def _get_cpp_parser():
-    """Get or create a tree-sitter C++ parser."""
+    """Get or create a cached tree-sitter C++ parser."""
     if not TREE_SITTER_CPP_AVAILABLE:
         raise RuntimeError("tree-sitter-cpp not available")
 
-    cpp_lang = tree_sitter.Language(tree_sitter_cpp.language())
-    parser = tree_sitter.Parser(cpp_lang)
-    return parser
+    if "cpp" not in _PARSER_CACHE:
+        cpp_lang = tree_sitter.Language(tree_sitter_cpp.language())
+        _PARSER_CACHE["cpp"] = tree_sitter.Parser(cpp_lang)
+    return _PARSER_CACHE["cpp"]
 
 
 def _get_kotlin_parser():
-    """Get or create a tree-sitter Kotlin parser."""
+    """Get or create a cached tree-sitter Kotlin parser."""
     if not TREE_SITTER_KOTLIN_AVAILABLE:
         raise RuntimeError("tree-sitter-kotlin not available")
 
-    kotlin_lang = tree_sitter.Language(tree_sitter_kotlin.language())
-    parser = tree_sitter.Parser(kotlin_lang)
-    return parser
+    if "kotlin" not in _PARSER_CACHE:
+        kotlin_lang = tree_sitter.Language(tree_sitter_kotlin.language())
+        _PARSER_CACHE["kotlin"] = tree_sitter.Parser(kotlin_lang)
+    return _PARSER_CACHE["kotlin"]
 
 
 def _get_swift_parser():
-    """Get or create a tree-sitter Swift parser."""
+    """Get or create a cached tree-sitter Swift parser."""
     if not TREE_SITTER_SWIFT_AVAILABLE:
         raise RuntimeError("tree-sitter-swift not available")
 
-    swift_lang = tree_sitter.Language(tree_sitter_swift.language())
-    parser = tree_sitter.Parser(swift_lang)
-    return parser
+    if "swift" not in _PARSER_CACHE:
+        swift_lang = tree_sitter.Language(tree_sitter_swift.language())
+        _PARSER_CACHE["swift"] = tree_sitter.Parser(swift_lang)
+    return _PARSER_CACHE["swift"]
 
 
 def _get_csharp_parser():
-    """Get or create a tree-sitter C# parser."""
+    """Get or create a cached tree-sitter C# parser."""
     if not TREE_SITTER_CSHARP_AVAILABLE:
         raise RuntimeError("tree-sitter-c-sharp not available")
 
-    csharp_lang = tree_sitter.Language(tree_sitter_c_sharp.language())
-    parser = tree_sitter.Parser(csharp_lang)
-    return parser
+    if "csharp" not in _PARSER_CACHE:
+        csharp_lang = tree_sitter.Language(tree_sitter_c_sharp.language())
+        _PARSER_CACHE["csharp"] = tree_sitter.Parser(csharp_lang)
+    return _PARSER_CACHE["csharp"]
 
 
 def _get_scala_parser():
-    """Get or create a tree-sitter Scala parser."""
+    """Get or create a cached tree-sitter Scala parser."""
     if not TREE_SITTER_SCALA_AVAILABLE:
         raise RuntimeError("tree-sitter-scala not available")
 
-    scala_lang = tree_sitter.Language(tree_sitter_scala.language())
-    parser = tree_sitter.Parser(scala_lang)
-    return parser
+    if "scala" not in _PARSER_CACHE:
+        scala_lang = tree_sitter.Language(tree_sitter_scala.language())
+        _PARSER_CACHE["scala"] = tree_sitter.Parser(scala_lang)
+    return _PARSER_CACHE["scala"]
 
 
 def scan_project(
@@ -1747,7 +1807,8 @@ def _parse_csharp_using_node(node, source: bytes) -> dict | None:
 def build_function_index(
     root: str | Path,
     language: str = "python",
-    workspace_config: Optional[WorkspaceConfig] = None
+    workspace_config: Optional[WorkspaceConfig] = None,
+    file_list: Optional[list[str]] = None
 ) -> dict[tuple[str, str], str]:
     """
     Build an index mapping (module_name, function_name) to file paths.
@@ -1756,6 +1817,7 @@ def build_function_index(
         root: Project root directory
         language: "python" or "typescript"
         workspace_config: Optional WorkspaceConfig for monorepo scoping
+        file_list: Optional pre-scanned list of source files (avoids duplicate scan)
 
     Returns:
         Dict mapping (module, func_name) tuples to relative file paths
@@ -1763,7 +1825,10 @@ def build_function_index(
     root = Path(root)
     index = {}
 
-    for src_file in scan_project(root, language, workspace_config):
+    # Use provided file_list or scan project
+    source_files = file_list if file_list is not None else scan_project(root, language, workspace_config)
+
+    for src_file in source_files:
         src_path = Path(src_file)
         rel_path = src_path.relative_to(root)
 
@@ -2904,20 +2969,23 @@ def build_project_call_graph(
     if use_workspace_config:
         workspace_config = load_workspace_config(root)
 
-    func_index = build_function_index(root, language, workspace_config)
+    # Scan project once and reuse file list for both index building and call graph building
+    file_list = scan_project(root, language, workspace_config)
+
+    func_index = build_function_index(root, language, workspace_config, file_list=file_list)
 
     if language == "python":
-        _build_python_call_graph(root, graph, func_index, workspace_config)
+        _build_python_call_graph(root, graph, func_index, workspace_config, file_list=file_list)
     elif language == "typescript":
-        _build_typescript_call_graph(root, graph, func_index, workspace_config)
+        _build_typescript_call_graph(root, graph, func_index, workspace_config, file_list=file_list)
     elif language == "go":
-        _build_go_call_graph(root, graph, func_index, workspace_config)
+        _build_go_call_graph(root, graph, func_index, workspace_config, file_list=file_list)
     elif language == "rust":
-        _build_rust_call_graph(root, graph, func_index, workspace_config)
+        _build_rust_call_graph(root, graph, func_index, workspace_config, file_list=file_list)
     elif language == "java":
-        _build_java_call_graph(root, graph, func_index, workspace_config)
+        _build_java_call_graph(root, graph, func_index, workspace_config, file_list=file_list)
     elif language == "c":
-        _build_c_call_graph(root, graph, func_index, workspace_config)
+        _build_c_call_graph(root, graph, func_index, workspace_config, file_list=file_list)
 
     return graph
 
@@ -2926,10 +2994,14 @@ def _build_python_call_graph(
     root: Path,
     graph: ProjectCallGraph,
     func_index: dict,
-    workspace_config: Optional[WorkspaceConfig] = None
+    workspace_config: Optional[WorkspaceConfig] = None,
+    file_list: Optional[list[str]] = None
 ):
     """Build call graph for Python files."""
-    for py_file in scan_project(root, "python", workspace_config):
+    # Use provided file_list or scan project
+    source_files = file_list if file_list is not None else scan_project(root, "python", workspace_config)
+
+    for py_file in source_files:
         py_path = Path(py_file)
         rel_path = str(py_path.relative_to(root))
 
@@ -3000,10 +3072,14 @@ def _build_typescript_call_graph(
     root: Path,
     graph: ProjectCallGraph,
     func_index: dict,
-    workspace_config: Optional[WorkspaceConfig] = None
+    workspace_config: Optional[WorkspaceConfig] = None,
+    file_list: Optional[list[str]] = None
 ):
     """Build call graph for TypeScript files."""
-    for ts_file in scan_project(root, "typescript", workspace_config):
+    # Use provided file_list or scan project
+    source_files = file_list if file_list is not None else scan_project(root, "typescript", workspace_config)
+
+    for ts_file in source_files:
         ts_path = Path(ts_file)
         rel_path = str(ts_path.relative_to(root))
 
@@ -3079,6 +3155,7 @@ def _build_typescript_call_graph(
                                 graph.add_edge(rel_path, caller_func, dst_file, method)
 
 
+@lru_cache(maxsize=1024)
 def _resolve_ts_import(from_file: str, import_path: str) -> str:
     """Resolve a relative TypeScript import path to a file path."""
     from_dir = str(Path(from_file).parent)
@@ -3104,14 +3181,44 @@ def _resolve_ts_import(from_file: str, import_path: str) -> str:
     return resolved
 
 
+def _build_name_to_files_index(func_index: dict) -> dict:
+    """
+    Build reverse index for O(1) lookup by function name.
+
+    Transforms func_index {(mod, name): file_path, ...} into
+    {name: [(mod, file_path), ...]} for efficient name-based lookup.
+
+    Args:
+        func_index: Dictionary mapping (module, func_name) tuples to file paths
+
+    Returns:
+        Dictionary mapping function names to list of (module, file_path) tuples
+    """
+    name_index: dict[str, list[tuple[str, str]]] = {}
+    for key, file_path in func_index.items():
+        if isinstance(key, tuple) and len(key) == 2:
+            mod, name = key
+            if name not in name_index:
+                name_index[name] = []
+            name_index[name].append((mod, file_path))
+    return name_index
+
+
 def _build_go_call_graph(
     root: Path,
     graph: ProjectCallGraph,
     func_index: dict,
-    workspace_config: Optional[WorkspaceConfig] = None
+    workspace_config: Optional[WorkspaceConfig] = None,
+    file_list: Optional[list[str]] = None
 ):
     """Build call graph for Go files."""
-    for go_file in scan_project(root, "go", workspace_config):
+    # Build reverse index once for O(1) lookup by function name
+    name_index = _build_name_to_files_index(func_index)
+
+    # Use provided file_list or scan project
+    source_files = file_list if file_list is not None else scan_project(root, "go", workspace_config)
+
+    for go_file in source_files:
         go_path = Path(go_file)
         rel_path = str(go_path.relative_to(root))
 
@@ -3155,19 +3262,16 @@ def _build_go_call_graph(
                         pkg, func_name = parts
                         if pkg in package_imports:
                             pkg_path = package_imports[pkg]
-                            # Try to find in function index
-                            # For Go packages, look in all files in the package directory
-                            for key, file_path in func_index.items():
-                                # Handle both tuple keys (mod, name) and string keys
-                                if isinstance(key, tuple) and len(key) == 2:
-                                    mod, name = key
-                                    if name == func_name:
-                                        # Check if this file is in the right package
-                                        if pkg_path.lstrip('./') in file_path or mod == pkg:
-                                            graph.add_edge(rel_path, caller_func, file_path, func_name)
-                                            break
+                            # O(1) lookup by function name instead of O(n) scan
+                            candidates = name_index.get(func_name, [])
+                            for mod, file_path in candidates:
+                                # Check if this file is in the right package
+                                if pkg_path.lstrip('./') in file_path or mod == pkg:
+                                    graph.add_edge(rel_path, caller_func, file_path, func_name)
+                                    break
 
 
+@lru_cache(maxsize=1024)
 def _resolve_go_import(from_file: str, import_path: str) -> str:
     """Resolve a relative Go import path to a directory path."""
     from_dir = str(Path(from_file).parent)
@@ -3197,10 +3301,14 @@ def _build_rust_call_graph(
     root: Path,
     graph: ProjectCallGraph,
     func_index: dict,
-    workspace_config: Optional[WorkspaceConfig] = None
+    workspace_config: Optional[WorkspaceConfig] = None,
+    file_list: Optional[list[str]] = None
 ):
     """Build call graph for Rust files."""
-    for rs_file in scan_project(root, "rust", workspace_config):
+    # Use provided file_list or scan project
+    source_files = file_list if file_list is not None else scan_project(root, "rust", workspace_config)
+
+    for rs_file in source_files:
         rs_path = Path(rs_file)
         rel_path = str(rs_path.relative_to(root))
 
@@ -3278,6 +3386,7 @@ def _build_rust_call_graph(
                                 graph.add_edge(rel_path, caller_func, func_index[key], func_name)
 
 
+@lru_cache(maxsize=1024)
 def _resolve_rust_module(module: str, from_file: str, root: Path) -> str:
     """
     Resolve a Rust module path to a potential file path.
@@ -3320,10 +3429,17 @@ def _build_java_call_graph(
     root: Path,
     graph: ProjectCallGraph,
     func_index: dict,
-    workspace_config: Optional[WorkspaceConfig] = None
+    workspace_config: Optional[WorkspaceConfig] = None,
+    file_list: Optional[list[str]] = None
 ):
     """Build call graph for Java files."""
-    for java_file in scan_project(root, "java", workspace_config):
+    # Build reverse index once for O(1) lookup by function name
+    name_index = _build_name_to_files_index(func_index)
+
+    # Use provided file_list or scan project
+    source_files = file_list if file_list is not None else scan_project(root, "java", workspace_config)
+
+    for java_file in source_files:
         java_path = Path(java_file)
         rel_path = str(java_path.relative_to(root))
 
@@ -3359,38 +3475,40 @@ def _build_java_call_graph(
 
                 elif call_type == 'direct':
                     # Direct call might be to a same-package class or an imported one
-                    # Try to find in function index
-                    for key, file_path in func_index.items():
-                        if isinstance(key, tuple) and len(key) == 2:
-                            mod, name = key
-                            if name == call_target:
-                                graph.add_edge(rel_path, caller_func, file_path, call_target)
-                                break
+                    # O(1) lookup by function name instead of O(n) scan
+                    candidates = name_index.get(call_target, [])
+                    for mod, file_path in candidates:
+                        graph.add_edge(rel_path, caller_func, file_path, call_target)
+                        break
 
                 elif call_type == 'attr':
                     # Object.method() call
                     if '.' in call_target:
                         parts = call_target.split('.')
-                        obj_name = parts[0]
                         method_name = parts[-1]
 
-                        # Try to find the method in the function index
-                        for key, file_path in func_index.items():
-                            if isinstance(key, tuple) and len(key) == 2:
-                                mod, name = key
-                                if name == method_name:
-                                    graph.add_edge(rel_path, caller_func, file_path, method_name)
-                                    break
+                        # O(1) lookup by method name instead of O(n) scan
+                        candidates = name_index.get(method_name, [])
+                        for mod, file_path in candidates:
+                            graph.add_edge(rel_path, caller_func, file_path, method_name)
+                            break
 
 
 def _build_c_call_graph(
     root: Path,
     graph: ProjectCallGraph,
     func_index: dict,
-    workspace_config: Optional[WorkspaceConfig] = None
+    workspace_config: Optional[WorkspaceConfig] = None,
+    file_list: Optional[list[str]] = None
 ):
     """Build call graph for C files."""
-    for c_file in scan_project(root, "c", workspace_config):
+    # Build reverse index once for O(1) lookup by function name
+    name_index = _build_name_to_files_index(func_index)
+
+    # Use provided file_list or scan project
+    source_files = file_list if file_list is not None else scan_project(root, "c", workspace_config)
+
+    for c_file in source_files:
         c_path = Path(c_file)
         rel_path = str(c_path.relative_to(root))
 
@@ -3419,10 +3537,8 @@ def _build_c_call_graph(
                     graph.add_edge(rel_path, caller_func, rel_path, call_target)
 
                 elif call_type == 'direct':
-                    # Direct call - try to find in function index
-                    for key, file_path in func_index.items():
-                        if isinstance(key, tuple) and len(key) == 2:
-                            mod, name = key
-                            if name == call_target:
-                                graph.add_edge(rel_path, caller_func, file_path, call_target)
-                                break
+                    # O(1) lookup by function name instead of O(n) scan
+                    candidates = name_index.get(call_target, [])
+                    for mod, file_path in candidates:
+                        graph.add_edge(rel_path, caller_func, file_path, call_target)
+                        break

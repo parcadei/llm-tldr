@@ -17,13 +17,16 @@ Usage:
 
     # Check how many files changed (useful for threshold tuning)
     count = get_dirty_count(project_path)
+
+    # Batch marking for efficiency (single disk write)
+    mark_dirty_batch(project_path, ["src/a.py", "src/b.py", "src/c.py"])
 """
 
 import fcntl
 import json
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import List, Union
+from typing import Iterable, List, Set, Union
 
 
 # Path to dirty flag file relative to project root
@@ -48,21 +51,24 @@ def _get_timestamp() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
-def mark_dirty(project_path: Union[str, Path], edited_file: str) -> None:
-    """Mark a file as dirty (needing cache rebuild).
+def _mark_dirty_impl(
+    project_path: Union[str, Path], files_to_add: Iterable[str]
+) -> None:
+    """Internal implementation for marking files dirty.
 
-    Creates or updates the dirty flag file with the edited file path.
-    Multiple calls append to the list without duplicates.
-    Uses file locking to prevent TOCTOU race conditions when multiple
-    processes mark files dirty concurrently.
+    Uses set for O(1) membership checks and supports batch operations.
+    File locking prevents TOCTOU race conditions in concurrent access.
 
     Args:
         project_path: Root directory of the project
-        edited_file: Relative path to the edited file
+        files_to_add: Iterable of file paths to mark dirty
     """
     dirty_path = _get_dirty_path(project_path)
-    normalized_file = _normalize_file_path(edited_file)
+    normalized_files = {_normalize_file_path(f) for f in files_to_add}
     now = _get_timestamp()
+
+    if not normalized_files:
+        return  # Nothing to add
 
     # Ensure parent directories exist before opening file
     dirty_path.parent.mkdir(parents=True, exist_ok=True)
@@ -92,19 +98,54 @@ def mark_dirty(project_path: Union[str, Path], edited_file: str) -> None:
                     "last_dirty_at": now,
                 }
 
-            # Add file if not already present
-            if normalized_file not in data["dirty_files"]:
-                data["dirty_files"].append(normalized_file)
+            # Convert to set for O(1) membership check, add new files
+            existing_files: Set[str] = set(data["dirty_files"])
+            new_files = normalized_files - existing_files
 
-            # Update last_dirty_at
-            data["last_dirty_at"] = now
+            if new_files:
+                # Only write if there are actual new files
+                data["dirty_files"] = list(existing_files | normalized_files)
+                data["last_dirty_at"] = now
 
-            # Write back atomically (truncate and rewrite)
-            f.seek(0)
-            f.truncate()
-            f.write(json.dumps(data, indent=2))
+                # Write back atomically (truncate and rewrite)
+                f.seek(0)
+                f.truncate()
+                f.write(json.dumps(data, separators=(',', ':')))
         finally:
             fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+
+
+def mark_dirty(project_path: Union[str, Path], edited_file: str) -> None:
+    """Mark a file as dirty (needing cache rebuild).
+
+    Creates or updates the dirty flag file with the edited file path.
+    Multiple calls append to the list without duplicates.
+    Uses file locking to prevent TOCTOU race conditions when multiple
+    processes mark files dirty concurrently.
+
+    Args:
+        project_path: Root directory of the project
+        edited_file: Relative path to the edited file
+    """
+    _mark_dirty_impl(project_path, [edited_file])
+
+
+def mark_dirty_batch(
+    project_path: Union[str, Path], edited_files: Iterable[str]
+) -> None:
+    """Mark multiple files as dirty with a single disk write.
+
+    More efficient than calling mark_dirty() repeatedly when multiple
+    files change at once (e.g., during a git checkout or bulk refactor).
+
+    Args:
+        project_path: Root directory of the project
+        edited_files: Iterable of relative paths to edited files
+
+    Example:
+        mark_dirty_batch(project, ["src/a.py", "src/b.py", "src/c.py"])
+    """
+    _mark_dirty_impl(project_path, edited_files)
 
 
 def is_dirty(project_path: Union[str, Path]) -> bool:

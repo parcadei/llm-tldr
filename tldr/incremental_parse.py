@@ -12,8 +12,7 @@ Key components:
 import hashlib
 import json
 import logging
-import pickle
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional
 
@@ -26,7 +25,7 @@ TREE_SITTER_GO_AVAILABLE = False
 TREE_SITTER_RUST_AVAILABLE = False
 
 try:
-    from tree_sitter import Language, Parser, Tree
+    from tree_sitter import Language, Parser
     import tree_sitter_typescript
     import tree_sitter_javascript
     TREE_SITTER_AVAILABLE = True
@@ -176,6 +175,7 @@ class TreeCache:
         """
         self._cache_dir = Path(cache_dir) if cache_dir else None
         self._memory_cache: dict[str, tuple[Any, bytes]] = {}  # path -> (tree, source)
+        self._dirty = False  # Track if index needs saving
 
         if self._cache_dir:
             self._cache_dir.mkdir(parents=True, exist_ok=True)
@@ -250,7 +250,7 @@ class TreeCache:
             with open(cache_path, "wb") as f:
                 f.write(source)
 
-            self._save_index()
+            self._dirty = True  # Mark for batch save instead of immediate write
 
     def _detect_language(self, file_path: str) -> str:
         """Detect language from file extension."""
@@ -317,12 +317,13 @@ class TreeCache:
                 cache_path = self._get_cache_path(file_path)
                 if cache_path.exists():
                     cache_path.unlink()
-                self._save_index()
+                self._dirty = True  # Mark for batch save
 
     def clear(self) -> None:
         """Clear all cached trees."""
         self._memory_cache.clear()
         self._index.clear()
+        self._dirty = False  # Nothing to save after clear
 
         if self._cache_dir:
             # Remove all cache files
@@ -330,6 +331,38 @@ class TreeCache:
                 cache_file.unlink()
             if self._index_path.exists():
                 self._index_path.unlink()
+
+    def flush(self) -> None:
+        """Persist pending changes to disk.
+
+        Call this after batch operations to write the index once
+        instead of on every store/invalidate.
+        """
+        if not self._dirty:
+            return
+        self._save_index()
+        self._dirty = False
+
+    def __del__(self) -> None:
+        """Auto-flush on garbage collection."""
+        try:
+            self.flush()
+        except Exception:
+            # Suppress errors during interpreter shutdown
+            pass
+
+    def get_cached_hash(self, file_path: str) -> Optional[str]:
+        """Get the cached hash for a file without loading full content.
+
+        Args:
+            file_path: Path to check
+
+        Returns:
+            SHA1 hash string if cached, None if not in cache
+        """
+        if file_path in self._index:
+            return self._index[file_path].source_hash
+        return None
 
 
 def _get_parser(language: str) -> Optional[Any]:
@@ -433,16 +466,22 @@ class IncrementalParser:
         with open(path, "rb") as f:
             new_content = f.read()
 
-        # Check cache
+        # Fast hash comparison before loading full cached content
+        cached_hash = self._cache.get_cached_hash(file_path)
+        if cached_hash is not None:
+            new_hash = hashlib.sha1(new_content).hexdigest()
+            if cached_hash == new_hash:
+                # Hash match - file unchanged, get cached tree
+                cached = self._cache.get(file_path)
+                if cached is not None:
+                    self._stats["cache_hits"] += 1
+                    return cached[0]  # Return tree
+
+        # Check cache for incremental parsing
         cached = self._cache.get(file_path)
 
         if cached is not None:
             old_tree, old_content = cached
-
-            # Check if content unchanged (cache hit)
-            if old_content == new_content:
-                self._stats["cache_hits"] += 1
-                return old_tree
 
             # Content changed - try incremental parse
             self._stats["cache_misses"] += 1
@@ -501,6 +540,22 @@ class IncrementalParser:
             file_path: Path to invalidate
         """
         self._cache.invalidate(file_path)
+
+    def flush(self) -> None:
+        """Persist pending cache changes to disk.
+
+        Call this after batch operations (e.g., parsing many files) to write
+        the index once instead of on every parse. This provides significant
+        performance improvement for bulk operations.
+        """
+        self._cache.flush()
+
+    def __del__(self) -> None:
+        """Auto-flush on garbage collection."""
+        try:
+            self.flush()
+        except Exception:
+            pass
 
 
 def parse_incremental(

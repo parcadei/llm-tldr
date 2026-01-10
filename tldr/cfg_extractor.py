@@ -618,6 +618,44 @@ def extract_python_cfg(source: str, function_name: str) -> CFGInfo:
     raise ValueError(f"Function '{function_name}' not found in source")
 
 
+def extract_python_cfgs_batch(source: str, function_names: set[str] | None = None) -> dict[str, CFGInfo]:
+    """
+    Extract CFGs for multiple functions in a single parse pass.
+
+    This is significantly more efficient than calling extract_python_cfg
+    repeatedly, as it parses the source code only once. For a file with
+    N functions, this reduces O(N) parses to O(1).
+
+    Args:
+        source: Python source code as string
+        function_names: Set of function names to extract. If None, extracts all functions.
+
+    Returns:
+        Dict mapping function name to CFGInfo. Functions that fail to build
+        are silently skipped (not included in result).
+    """
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return {}
+
+    results: dict[str, CFGInfo] = {}
+
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            # Skip if we're filtering and this function isn't requested
+            if function_names is not None and node.name not in function_names:
+                continue
+            try:
+                builder = PythonCFGBuilder()
+                results[node.name] = builder.build(node)
+            except Exception:
+                # Skip functions that fail to build CFG
+                pass
+
+    return results
+
+
 # =============================================================================
 # Tree-sitter based CFG extraction (TypeScript, Go, Rust)
 # =============================================================================
