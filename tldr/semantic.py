@@ -19,6 +19,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List, Optional
 
+ALL_LANGUAGES = ["python", "typescript", "javascript", "go", "rust", "java", "c", "cpp", "ruby", "php", "kotlin", "swift", "csharp", "scala", "lua", "elixir"]
+
 # Lazy imports for heavy dependencies
 _model = None
 _model_name = None  # Track which model is loaded
@@ -657,10 +659,21 @@ def build_semantic_index(
     # Extract all units (respecting .tldrignore)
     if console:
         with console.status("[bold green]Extracting code units...") as status:
-            units = extract_units_from_project(str(project), lang=lang, respect_ignore=respect_ignore)
+            if lang == "all":
+                units = []
+                for l in ALL_LANGUAGES:
+                    status.update(f"[bold green]Extracting {l} code units...")
+                    units.extend(extract_units_from_project(str(project), lang=l, respect_ignore=respect_ignore))
+            else:
+                units = extract_units_from_project(str(project), lang=lang, respect_ignore=respect_ignore)
             status.update(f"[bold green]Extracted {len(units)} code units")
     else:
-        units = extract_units_from_project(str(project), lang=lang, respect_ignore=respect_ignore)
+        if lang == "all":
+            units = []
+            for l in ALL_LANGUAGES:
+                units.extend(extract_units_from_project(str(project), lang=l, respect_ignore=respect_ignore))
+        else:
+            units = extract_units_from_project(str(project), lang=lang, respect_ignore=respect_ignore)
 
     if not units:
         return 0
