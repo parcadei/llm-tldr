@@ -124,8 +124,8 @@ class PythonDefUseVisitor(ast.NodeVisitor):
         ref = VarRef(
             name=name,
             ref_type=ref_type,
-            line=node.lineno,
-            column=node.col_offset,
+            line=getattr(node, "lineno", 0),
+            column=getattr(node, "col_offset", 0),
         )
         self.refs.append(ref)
 
@@ -624,7 +624,7 @@ TREE_SITTER_RUST_AVAILABLE = False
 try:
     from tree_sitter import Language, Parser
     import tree_sitter_typescript
-    import tree_sitter_javascript
+    import tree_sitter_javascript  # noqa: F401 - imported for availability detection
 
     TREE_SITTER_AVAILABLE = True
 except ImportError:

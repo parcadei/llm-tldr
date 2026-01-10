@@ -409,7 +409,11 @@ def get_file_hash_cache(project_root: str) -> dict[str, str]:
         return {}
 
     try:
-        return _json_loads(cache_path.read_bytes())
+        data = _json_loads(cache_path.read_bytes())
+        # Validate JSON structure matches expected dict[str, str]
+        if not isinstance(data, dict):
+            return {}
+        return {k: v for k, v in data.items() if isinstance(k, str) and isinstance(v, str)}
     except (ValueError, IOError):
         return {}
 
@@ -447,11 +451,18 @@ def get_file_info_cache(project_root: str) -> dict[str, FileInfo]:
 
     try:
         raw_data = _json_loads(cache_path.read_bytes())
+        # Validate JSON structure is a dict before calling .items()
+        if not isinstance(raw_data, dict):
+            return {}
         # Convert raw dict entries to FileInfo objects
-        return {
-            path: FileInfo(hash=info["hash"], mtime_ns=info["mtime_ns"])
-            for path, info in raw_data.items()
-        }
+        result: dict[str, FileInfo] = {}
+        for path, info in raw_data.items():
+            if isinstance(path, str) and isinstance(info, dict):
+                hash_val = info.get("hash")
+                mtime_val = info.get("mtime_ns")
+                if isinstance(hash_val, str) and isinstance(mtime_val, int):
+                    result[path] = FileInfo(hash=hash_val, mtime_ns=mtime_val)
+        return result
     except (ValueError, IOError, KeyError, TypeError):
         return {}
 

@@ -1190,8 +1190,8 @@ class TLDRDaemon:
                 from tldr.ast_extractor import extract_file
 
                 info = extract_file(str(full_path))
-                for func in info.get("functions", []):
-                    changed_functions.add(func.get("name", ""))
+                for func in info.functions:
+                    changed_functions.add(func.name)
             except Exception as e:
                 logger.debug(f"Could not extract {file_path}: {e}")
 
@@ -1512,14 +1512,19 @@ def start_daemon(project_path: str | Path, foreground: bool = False):
             addr, port = daemon._get_connection_info()
 
             # Start detached process on Windows
-            startupinfo = subprocess.STARTUPINFO()
-            startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-            startupinfo.wShowWindow = subprocess.SW_HIDE
+            # These Windows-specific APIs are guarded by platform check above
+            startupinfo = subprocess.STARTUPINFO()  # type: ignore[attr-defined]
+            startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW  # type: ignore[attr-defined]
+            startupinfo.wShowWindow = subprocess.SW_HIDE  # type: ignore[attr-defined]
+
+            # Windows-specific creation flags (0 on other platforms for type safety)
+            detached = getattr(subprocess, "DETACHED_PROCESS", 0)
+            no_window = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
             proc = subprocess.Popen(
                 [sys.executable, "-m", "tldr.daemon", str(project), "--foreground"],
                 startupinfo=startupinfo,
-                creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NO_WINDOW,
+                creationflags=detached | no_window,
             )
             print(f"Daemon started with PID {proc.pid}")
             print(f"Listening on {addr}:{port}")

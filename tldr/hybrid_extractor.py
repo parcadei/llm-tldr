@@ -459,10 +459,10 @@ class HybridExtractor:
                         names.add(self._safe_decode(source[c.start_byte : c.end_byte]))
                         break
             elif child.type == "class_declaration":
-                class_name = ""
+                _class_name = ""  # Tracked for future class-method association
                 for c in child.children:
                     if c.type in ("identifier", "type_identifier"):
-                        class_name = self._safe_decode(
+                        _class_name = self._safe_decode(
                             source[c.start_byte : c.end_byte]
                         )
                     elif c.type == "class_body":
@@ -1350,7 +1350,7 @@ class HybridExtractor:
         if defined_names is None:
             defined_names = set()
         impl_type = ""
-        trait_name = ""
+        _trait_name = ""  # Tracked for future trait impl support
 
         for child in node.children:
             if child.type == "type_identifier":
@@ -2537,11 +2537,11 @@ class HybridExtractor:
         if text.startswith("import "):
             module = text[7:].strip()
             # Handle alias: import foo.bar as baz
-            alias = None
+            _alias = None  # Tracked for future alias support in ImportInfo
             if " as " in module:
                 parts = module.split(" as ")
                 module = parts[0].strip()
-                alias = parts[1].strip()
+                _alias = parts[1].strip()
             return ImportInfo(
                 module=module,
                 names=[],
@@ -3488,7 +3488,7 @@ class HybridExtractor:
         try:
             params_str = sig.split("(", 1)[1].rsplit(")", 1)[0]
             return [p.strip() for p in params_str.split(",") if p.strip()]
-        except:
+        except (ValueError, IndexError):
             return []
 
     def _detect_language(self, file_path: Path) -> str:

@@ -82,6 +82,7 @@ from .cfg_extractor import (
 from .dedup import ContentHashedIndex  # P5 #21: Content-hash deduplication
 from .cross_file_calls import (
     build_project_call_graph,
+    ProjectCallGraph,
 )
 from .cross_file_calls import (
     build_function_index as _build_function_index,
@@ -367,7 +368,7 @@ def _resolve_source(source_or_path: str) -> tuple[str, str | None]:
 # =============================================================================
 
 # Module-level cache for call graphs: {(project_path, language): (mtime, graph)}
-_call_graph_cache: dict[tuple[str, str], tuple[float, "CallGraphInfo"]] = {}
+_call_graph_cache: dict[tuple[str, str], tuple[float, ProjectCallGraph]] = {}
 
 
 def _get_project_mtime(project: Path, extensions: set[str]) -> float:
@@ -408,7 +409,7 @@ def _get_cached_call_graph(
     project: Path,
     language: str,
     extensions: set[str],
-) -> "CallGraphInfo":
+) -> ProjectCallGraph:
     """Get call graph with mtime-based caching.
 
     Caches call graph per (project, language) and invalidates when any
@@ -420,7 +421,7 @@ def _get_cached_call_graph(
         extensions: Set of file extensions for this language
 
     Returns:
-        CallGraphInfo from cache or freshly built.
+        ProjectCallGraph from cache or freshly built.
     """
     cache_key = (str(project), language)
     project_mtime = _get_project_mtime(project, extensions)

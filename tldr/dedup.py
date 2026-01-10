@@ -120,6 +120,10 @@ class ContentHashedIndex:
             file_path, lang=lang, project_root=self.project_root
         )
 
+        # Handle extraction failure
+        if edges is None:
+            return []
+
         # Store by content hash
         edge_tuples = [e.to_tuple() for e in edges]
         self._by_hash[content_hash] = edge_tuples

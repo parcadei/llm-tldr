@@ -42,6 +42,7 @@ from typing import (
     Set,
     Tuple,
     TypeVar,
+    cast,
 )
 
 # Type variables for generic query handling
@@ -69,18 +70,18 @@ def salsa_query(func: Callable[..., T]) -> Callable[..., T]:
     """
 
     @functools.wraps(func)
-    def wrapper(*args, **kwargs):
+    def wrapper(*args: Any, **kwargs: Any) -> T:
         # When called directly (not through db.query), just execute
         return func(*args, **kwargs)
 
     # Mark as salsa query
     setattr(wrapper, _SALSA_QUERY_MARKER, True)
-    wrapper._original_func = func
+    setattr(wrapper, "_original_func", func)
 
-    return wrapper
+    return cast(Callable[..., T], wrapper)
 
 
-def is_salsa_query(func: Callable) -> bool:
+def is_salsa_query(func: Callable[..., Any]) -> bool:
     """Check if a function is decorated with @salsa_query."""
     return getattr(func, _SALSA_QUERY_MARKER, False)
 
@@ -117,7 +118,7 @@ class SalsaDB:
     This allows multiple queries to execute concurrently without blocking each other.
     """
 
-    def __init__(self):
+    def __init__(self) -> None:
         self._lock = threading.RLock()
         self._thread_local = threading.local()  # Thread-local state for query tracking
 
@@ -149,7 +150,7 @@ class SalsaDB:
         """
         if not hasattr(self._thread_local, "query_stack"):
             self._thread_local.query_stack = []
-        return self._thread_local.query_stack
+        return cast(List[QueryKey], self._thread_local.query_stack)
 
     @property
     def _pending_deps(self) -> Dict[QueryKey, Set[QueryKey]]:
@@ -159,7 +160,7 @@ class SalsaDB:
         """
         if not hasattr(self._thread_local, "pending_deps"):
             self._thread_local.pending_deps = {}
-        return self._thread_local.pending_deps
+        return cast(Dict[QueryKey, Set[QueryKey]], self._thread_local.pending_deps)
 
     @property
     def _file_reads(self) -> Dict[QueryKey, Dict[str, int]]:
@@ -171,7 +172,7 @@ class SalsaDB:
         """
         if not hasattr(self._thread_local, "file_reads"):
             self._thread_local.file_reads = {}
-        return self._thread_local.file_reads
+        return cast(Dict[QueryKey, Dict[str, int]], self._thread_local.file_reads)
 
     # -------------------------------------------------------------------------
     # File Management
@@ -249,7 +250,7 @@ class SalsaDB:
     # Query Execution
     # -------------------------------------------------------------------------
 
-    def query(self, func: Callable[..., T], *args) -> T:
+    def query(self, func: Callable[..., T], *args: Any) -> T:
         """Execute a query with memoization and dependency tracking.
 
         Uses fine-grained locking: lock is only held during cache access,
@@ -282,7 +283,7 @@ class SalsaDB:
                     self._stats.cache_hits += 1
                     # Register dependency to parent even on cache hit
                     self._register_dependency_to_parent(key)
-                    return self._query_cache[key].result
+                    return cast(T, self._query_cache[key].result)
 
             self._stats.cache_misses += 1
 
@@ -475,7 +476,7 @@ class SalsaDB:
     # Dependency Management
     # -------------------------------------------------------------------------
 
-    def get_dependencies(self, func: Callable, *args) -> Set[QueryKey]:
+    def get_dependencies(self, func: Callable[..., Any], *args: Any) -> Set[QueryKey]:
         """Get the dependencies of a query.
 
         Args:
@@ -495,7 +496,7 @@ class SalsaDB:
     # Invalidation
     # -------------------------------------------------------------------------
 
-    def invalidate(self, func: Callable, *args) -> None:
+    def invalidate(self, func: Callable[..., Any], *args: Any) -> None:
         """Invalidate a specific query and its dependents.
 
         Args:

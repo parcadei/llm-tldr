@@ -11,6 +11,8 @@ Provides 5 layers of code analysis:
 All layers accessible separately (ARISTODE pattern) or combined.
 """
 
+from __future__ import annotations
+
 try:
     from importlib.metadata import version
 
@@ -25,11 +27,8 @@ from .signature_extractor_pygments import SignatureExtractor
 # Layer 1: AST
 from .ast_extractor import extract_python, extract_file
 
-# Layer 2: Call Graph (hybrid extractor has multiple exports)
-try:
-    from .hybrid_extractor import extract_call_graph
-except ImportError:
-    extract_call_graph = None  # Optional dependency
+# Layer 2: Call Graph (cross-file call graph builder)
+from .cross_file_calls import build_project_call_graph as extract_call_graph
 
 # Layer 3: CFG
 from .cfg_extractor import (

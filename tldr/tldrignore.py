@@ -119,10 +119,10 @@ def load_ignore_patterns(project_dir: str | Path) -> "PathSpec":
 
     if tldrignore_path.exists():
         content = tldrignore_path.read_text()
-        patterns = content.splitlines()
+        patterns: list[str] = content.splitlines()
     else:
         # Use defaults if no .tldrignore exists
-        patterns = DEFAULT_TEMPLATE.splitlines()
+        patterns = list(DEFAULT_TEMPLATE.splitlines())
 
     return pathspec.PathSpec.from_lines("gitwildmatch", patterns)
 

@@ -376,11 +376,11 @@ def scan_project(
     """
     from .tldrignore import load_ignore_patterns, should_ignore
 
-    root = Path(root)
-    files = []
+    root_str = str(Path(root))  # Convert to str to ensure os.walk/relpath return str
+    files: list[str] = []
 
     # Load ignore patterns if respecting .tldrignore
-    ignore_spec = load_ignore_patterns(root) if respect_ignore else None
+    ignore_spec = load_ignore_patterns(root_str) if respect_ignore else None
 
     if language == "python":
         extensions = {".py"}
@@ -409,37 +409,39 @@ def scan_project(
     else:
         raise ValueError(f"Unsupported language: {language}")
 
-    for dirpath, dirnames, filenames in os.walk(root):
+    for dirpath, dirnames, filenames in os.walk(root_str):
         # Skip ignored directories (modifying dirnames in-place prunes os.walk)
+        # Cast to str to satisfy type checker (os.walk/relpath return str for str input)
+        dirpath_str = str(dirpath)
         if respect_ignore and ignore_spec:
-            rel_dir = os.path.relpath(dirpath, root)
+            rel_dir = str(os.path.relpath(dirpath_str, root_str))
             # Check if current directory should be ignored
-            if rel_dir != "." and should_ignore(rel_dir + "/", root, ignore_spec):
+            if rel_dir != "." and should_ignore(rel_dir + "/", root_str, ignore_spec):
                 dirnames.clear()  # Don't descend into ignored directories
                 continue
             # Filter subdirectories
             dirnames[:] = [
                 d
                 for d in dirnames
-                if not should_ignore(os.path.join(rel_dir, d) + "/", root, ignore_spec)
+                if not should_ignore(os.path.join(rel_dir, str(d)) + "/", root_str, ignore_spec)
             ]
 
         for filename in filenames:
             if filename.endswith(tuple(extensions)):
-                file_path = os.path.join(dirpath, filename)
+                file_path = os.path.join(dirpath_str, str(filename))
                 # Check individual file against ignore patterns
                 if respect_ignore and ignore_spec:
-                    rel_path = os.path.relpath(file_path, root)
-                    if should_ignore(rel_path, root, ignore_spec):
+                    rel_path = str(os.path.relpath(file_path, root_str))
+                    if should_ignore(rel_path, root_str, ignore_spec):
                         continue
                 files.append(file_path)
 
     # Apply workspace config filtering if provided
     if workspace_config is not None:
         # Convert absolute paths to relative for filtering, then back to absolute
-        rel_files = [os.path.relpath(f, root) for f in files]
+        rel_files = [os.path.relpath(f, root_str) for f in files]
         filtered_rel = filter_paths(rel_files, workspace_config)
-        files = [os.path.join(root, f) for f in filtered_rel]
+        files = [os.path.join(root_str, f) for f in filtered_rel]
 
     return files
 
@@ -3862,7 +3864,6 @@ def _build_c_call_graph(
 
         for inc in includes:
             module = inc["module"]
-            is_system = inc.get("is_system", False)
             # Map the header file name to its path
             # e.g., "utils.h" -> "utils.h"
             header_name = module.split("/")[-1] if "/" in module else module

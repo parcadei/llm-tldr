@@ -22,12 +22,13 @@ from pathlib import Path
 from . import __version__
 
 
-def _get_subprocess_detach_kwargs():
+def _get_subprocess_detach_kwargs() -> dict:
     """Get platform-specific kwargs for detaching subprocess."""
     import subprocess
 
     if os.name == "nt":  # Windows
-        return {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP}
+        # CREATE_NEW_PROCESS_GROUP is Windows-only; use getattr for type safety
+        return {"creationflags": getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)}
     else:  # Unix (Mac/Linux)
         return {"start_new_session": True}
 
@@ -83,14 +84,12 @@ def _show_first_run_tip():
         return
 
     # Check if Swift is already installed
-    try:
-        import tree_sitter_swift
+    import importlib.util
 
+    if importlib.util.find_spec("tree_sitter_swift") is not None:
         # Swift already works, no tip needed
         marker.touch()
         return
-    except ImportError:
-        pass
 
     # Show tip
     import sys
@@ -1101,7 +1100,6 @@ Semantic Search:
 
                     missing_count = 0
                     for lang, checks in sorted(results.items()):
-                        has_issues = False
                         lines = []
 
                         tc = checks["type_checker"]
@@ -1111,7 +1109,6 @@ Semantic Search:
                             else:
                                 lines.append(f"  ✗ {tc['name']} - not found")
                                 lines.append(f"    → {tc['install']}")
-                                has_issues = True
                                 missing_count += 1
 
                         linter = checks["linter"]
@@ -1121,7 +1118,6 @@ Semantic Search:
                             else:
                                 lines.append(f"  ✗ {linter['name']} - not found")
                                 lines.append(f"    → {linter['install']}")
-                                has_issues = True
                                 missing_count += 1
 
                         if lines:

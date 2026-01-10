@@ -201,8 +201,8 @@ class PDGInfo:
             # Add this node's lines to slice (O(1) lookup via cached dict)
             node = self._node_by_id.get(node_id)
             if node:
-                for l in range(node.start_line, node.end_line + 1):
-                    slice_lines.add(l)
+                for line_num in range(node.start_line, node.end_line + 1):
+                    slice_lines.add(line_num)
 
             # Follow incoming edges
             for edge in incoming.get(node_id, []):
@@ -250,8 +250,8 @@ class PDGInfo:
             # Add this node's lines to slice (O(1) lookup via cached dict)
             node = self._node_by_id.get(node_id)
             if node:
-                for l in range(node.start_line, node.end_line + 1):
-                    slice_lines.add(l)
+                for line_num in range(node.start_line, node.end_line + 1):
+                    slice_lines.add(line_num)
 
             # Follow outgoing edges
             for edge in outgoing.get(node_id, []):

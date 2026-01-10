@@ -19,23 +19,23 @@ TREE_SITTER_GO_AVAILABLE = False
 TREE_SITTER_RUST_AVAILABLE = False
 
 try:
-    from tree_sitter import Language, Parser
-    import tree_sitter_typescript
-    import tree_sitter_javascript
+    from tree_sitter import Language, Parser  # noqa: F401
+    import tree_sitter_typescript  # noqa: F401
+    import tree_sitter_javascript  # noqa: F401
 
     TREE_SITTER_AVAILABLE = True
 except ImportError:
     pass
 
 try:
-    import tree_sitter_go
+    import tree_sitter_go  # noqa: F401
 
     TREE_SITTER_GO_AVAILABLE = True
 except ImportError:
     pass
 
 try:
-    import tree_sitter_rust
+    import tree_sitter_rust  # noqa: F401
 
     TREE_SITTER_RUST_AVAILABLE = True
 except ImportError:
@@ -43,7 +43,7 @@ except ImportError:
 
 TREE_SITTER_JAVA_AVAILABLE = False
 try:
-    import tree_sitter_java
+    import tree_sitter_java  # noqa: F401
 
     TREE_SITTER_JAVA_AVAILABLE = True
 except ImportError:
@@ -51,7 +51,7 @@ except ImportError:
 
 TREE_SITTER_C_AVAILABLE = False
 try:
-    import tree_sitter_c
+    import tree_sitter_c  # noqa: F401
 
     TREE_SITTER_C_AVAILABLE = True
 except ImportError:
@@ -59,7 +59,7 @@ except ImportError:
 
 TREE_SITTER_RUBY_AVAILABLE = False
 try:
-    import tree_sitter_ruby
+    import tree_sitter_ruby  # noqa: F401
 
     TREE_SITTER_RUBY_AVAILABLE = True
 except ImportError:
@@ -67,7 +67,7 @@ except ImportError:
 
 TREE_SITTER_PHP_AVAILABLE = False
 try:
-    import tree_sitter_php
+    import tree_sitter_php  # noqa: F401
 
     TREE_SITTER_PHP_AVAILABLE = True
 except ImportError:
@@ -75,7 +75,7 @@ except ImportError:
 
 TREE_SITTER_CPP_AVAILABLE = False
 try:
-    import tree_sitter_cpp
+    import tree_sitter_cpp  # noqa: F401
 
     TREE_SITTER_CPP_AVAILABLE = True
 except ImportError:
@@ -83,7 +83,7 @@ except ImportError:
 
 TREE_SITTER_SWIFT_AVAILABLE = False
 try:
-    import tree_sitter_swift
+    import tree_sitter_swift  # noqa: F401
 
     TREE_SITTER_SWIFT_AVAILABLE = True
 except ImportError:
@@ -91,7 +91,7 @@ except ImportError:
 
 TREE_SITTER_CSHARP_AVAILABLE = False
 try:
-    import tree_sitter_c_sharp
+    import tree_sitter_c_sharp  # noqa: F401
 
     TREE_SITTER_CSHARP_AVAILABLE = True
 except ImportError:
@@ -99,7 +99,7 @@ except ImportError:
 
 TREE_SITTER_KOTLIN_AVAILABLE = False
 try:
-    import tree_sitter_kotlin
+    import tree_sitter_kotlin  # noqa: F401
 
     TREE_SITTER_KOTLIN_AVAILABLE = True
 except ImportError:
@@ -107,7 +107,7 @@ except ImportError:
 
 TREE_SITTER_SCALA_AVAILABLE = False
 try:
-    import tree_sitter_scala
+    import tree_sitter_scala  # noqa: F401
 
     TREE_SITTER_SCALA_AVAILABLE = True
 except ImportError:
@@ -115,7 +115,7 @@ except ImportError:
 
 TREE_SITTER_ELIXIR_AVAILABLE = False
 try:
-    import tree_sitter_elixir
+    import tree_sitter_elixir  # noqa: F401
 
     TREE_SITTER_ELIXIR_AVAILABLE = True
 except ImportError:
@@ -123,7 +123,7 @@ except ImportError:
 
 TREE_SITTER_LUA_AVAILABLE = False
 try:
-    import tree_sitter_lua
+    import tree_sitter_lua  # noqa: F401
 
     TREE_SITTER_LUA_AVAILABLE = True
 except ImportError:
@@ -1296,8 +1296,8 @@ class TreeSitterCFGBuilder:
             branch = self.new_block("branch", node.start_point[0] + 1)
             branch_block_id = branch.id
 
-        # Get condition text (guard condition)
-        condition = self.get_node_text(node)
+        # Get condition text (guard condition) - kept for future use/debugging
+        _condition = self.get_node_text(node)
 
         # Create after-guard block for normal flow (guard passes)
         after_guard = self.new_block("body", node.end_point[0] + 1)

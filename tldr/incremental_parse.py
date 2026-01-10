@@ -220,9 +220,13 @@ class TreeCache:
                 self._index = {}
                 for k, v in data.items():
                     # Re-encode source back to bytes (saved as UTF-8 string for JSON)
-                    if "source" in v and isinstance(v["source"], str):
-                        v["source"] = v["source"].encode("utf-8")
-                    self._index[k] = CacheEntry(**v)
+                    source_raw = v.get("source", "")
+                    source = source_raw.encode("utf-8") if isinstance(source_raw, str) else source_raw
+                    self._index[k] = CacheEntry(
+                        source=source,
+                        source_hash=v.get("source_hash", ""),
+                        language=v.get("language", "unknown"),
+                    )
             except (json.JSONDecodeError, TypeError) as e:
                 logger.warning(f"Failed to load cache index: {e}")
                 self._index = {}
