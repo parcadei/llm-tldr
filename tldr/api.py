@@ -130,6 +130,8 @@ from .cross_file_calls import (
 from .cross_file_calls import (
     scan_project as _scan_project,
 )
+from .tldrignore import load_ignore_patterns, should_ignore
+        
 from .dfg_extractor import (
     DFGInfo,
     extract_c_dfg,
@@ -555,15 +557,19 @@ def get_relevant_context(
     # Search for module file matching entry_point
     if "." not in entry_point and "/" not in entry_point:
         module_file = None
-        for f in project.rglob(f"{entry_point}{ext_for_lang}"):
-            # Skip hidden dirs
-            try:
-                rel = f.relative_to(project)
-                if not any(p.startswith('.') for p in rel.parts):
-                    module_file = f
-                    break
-            except ValueError:
-                pass
+        # Use scan_project to respect .tldrignore patterns
+        files = _scan_project(str(project), language, respect_ignore=True)
+        ext_for_lang = {
+            "python": ".py",
+            "typescript": ".ts",
+            "go": ".go",
+            "rust": ".rs"
+        }.get(language, ".py")
+        
+        for f in files:
+            if Path(f).name == f"{entry_point}{ext_for_lang}":
+                module_file = Path(f)
+                break
 
         if module_file:
             # Found a module file - return its exports as module query
@@ -578,25 +584,13 @@ def get_relevant_context(
     extractor = HybridExtractor()
     signatures: dict[str, tuple[str, FunctionInfo]] = {}  # func_name -> (file, info)
 
-    ext_map = {
-        "python": {".py"},
-        "typescript": {".ts", ".tsx"},
-        "go": {".go"},
-        "rust": {".rs"}
-    }
-    extensions = ext_map.get(language, {".py"})
+    # Use scan_project to respect .tldrignore patterns
+    files = _scan_project(str(project), language, respect_ignore=True)
 
     # Also cache file sources for CFG extraction
     file_sources: dict[str, str] = {}
 
-    for file_path in project.rglob("*"):
-        # Check for hidden paths relative to project root, not absolute path
-        try:
-            rel_path = file_path.relative_to(project)
-            is_hidden = any(p.startswith('.') for p in rel_path.parts)
-        except ValueError:
-            is_hidden = False  # Not relative to project, allow it
-        if file_path.suffix in extensions and not is_hidden:
+    for file_path in files:
             try:
                 source = file_path.read_text()
                 file_sources[str(file_path)] = source
@@ -1308,6 +1302,9 @@ def get_file_tree(
 
     root = Path(root)
 
+    # Load .tldrignore patterns
+    ignore_patterns = load_ignore_patterns(str(root))
+
     def scan_dir(path: Path) -> dict:
         result = {"name": path.name, "type": "dir", "children": []}
 
@@ -1327,6 +1324,15 @@ def get_file_tree(
                 if child["children"] or extensions is None:
                     result["children"].append(child)
             elif item.is_file():
+                # Check .tldrignore patterns
+                try:
+                    rel_path = item.relative_to(root)
+                    rel_str = str(rel_path)
+                    if should_ignore(rel_str, str(root), ignore_patterns):
+                        continue
+                except ValueError:
+                    continue
+
                 if extensions is None or item.suffix in extensions:
                     result["children"].append(
                         {
@@ -1375,6 +1381,9 @@ def search(
 
     import re
 
+    # Load .tldrignore patterns
+    ignore_patterns = load_ignore_patterns(str(root))
+
     # Directories to skip (common junk)
     SKIP_DIRS = {
         "node_modules", "__pycache__", ".git", ".svn", ".hg",
@@ -1404,6 +1413,11 @@ def search(
             if any(part in SKIP_DIRS for part in parts):
                 continue
         except ValueError:
+            continue
+
+        # Check .tldrignore patterns
+        rel_str = str(rel_path)
+        if should_ignore(rel_str, str(root), ignore_patterns):
             continue
 
         # Filter by extension
@@ -1521,7 +1535,7 @@ def get_code_structure(
     """
     root = Path(root)
 
-    # Get extension map for language
+    # Get extension map for language (comprehensive support for all formats)
     ext_map = {
         "python": {".py"},
         "typescript": {".ts", ".tsx"},
@@ -1545,6 +1559,9 @@ def get_code_structure(
 
     result = {"root": str(root), "language": language, "files": []}
 
+    # Load .tldrignore patterns
+    ignore_patterns = load_ignore_patterns(str(root))
+
     count = 0
     for file_path in root.rglob("*"):
         if count >= max_results:
@@ -1560,6 +1577,15 @@ def get_code_structure(
         try:
             rel_path = file_path.relative_to(root)
             if any(part.startswith(".") for part in rel_path.parts):
+                continue
+        except ValueError:
+            continue
+
+        # Check .tldrignore patterns
+        try:
+            rel_path = file_path.relative_to(root)
+            rel_str = str(rel_path)
+            if should_ignore(rel_str, str(root), ignore_patterns):
                 continue
         except ValueError:
             continue
