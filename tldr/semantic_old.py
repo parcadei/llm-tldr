@@ -272,11 +272,9 @@ def extract_units_from_project(project_path: str, lang: str = "python", respect_
     project = Path(project_path).resolve()
     units = []
 
-    # Load ignore spec before getting structure
     from tldr.tldrignore import load_ignore_patterns
     ignore_spec = load_ignore_patterns(project) if respect_ignore else None
 
-    # Get code structure (L1) - use high limit for semantic index
     structure = get_code_structure(str(project), language=lang, max_results=100000, ignore_spec=ignore_spec)
 
     # Filter ignored files
@@ -783,7 +781,7 @@ def _get_progress_console():
 def _detect_project_languages(project_path: Path, respect_ignore: bool = True) -> List[str]:
     """Scan project files to detect present languages."""
     from tldr.tldrignore import load_ignore_patterns, should_ignore
-
+    
     # Extension map (copied from cli.py to avoid circular import)
     EXTENSION_TO_LANGUAGE = {
         '.java': 'java',
@@ -813,21 +811,21 @@ def _detect_project_languages(project_path: Path, respect_ignore: bool = True) -
         '.ex': 'elixir',
         '.exs': 'elixir',
     }
-
+    
     found_languages = set()
     spec = load_ignore_patterns(project_path) if respect_ignore else None
-
+    
     for root, dirs, files in os.walk(project_path):
         # Prune common heavy dirs immediately for speed
         dirs[:] = [d for d in dirs if d not in {'.git', 'node_modules', '.tldr', 'venv', '__pycache__', '.idea', '.vscode'}]
-
+        
         for file in files:
              file_path = Path(root) / file
-
+             
              # Check ignore patterns
              if respect_ignore and should_ignore(file_path, project_path, spec):
                  continue
-
+                 
              ext = file_path.suffix.lower()
              if ext in EXTENSION_TO_LANGUAGE:
                  found_languages.add(EXTENSION_TO_LANGUAGE[ext])
@@ -893,7 +891,7 @@ def build_semantic_index(
                     return 0
                 if console:
                     console.print(f"[dim]Detected languages: {', '.join(target_languages)}[/dim]")
-
+                
                 units = []
                 for lang_name in target_languages:
                     status.update(f"[bold green]Extracting {lang_name} code units...")
@@ -917,51 +915,45 @@ def build_semantic_index(
 
     import numpy as np
 
-    BATCH_SIZE = 64
-    num_units = len(units)
     texts = [build_embedding_text(unit) for unit in units]
 
     if console:
-        from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TaskProgressColumn
+        from rich.progress import Progress, SpinnerColumn, TextColumn
         with Progress(
             SpinnerColumn(),
-            TextColumn("[bold green]{task.description}"),
-            BarColumn(),
-            TaskProgressColumn(),
+            TextColumn("[bold green]Computing embeddings..."),
             console=console,
         ) as progress:
-            task = progress.add_task("Computing embeddings...", total=num_units)
+            task = progress.add_task("Encoding...", total=None)
 
             model_obj = get_model(model)
-            all_embeddings = []
-
-            for i in range(0, num_units, BATCH_SIZE):
-                chunk_end = min(i + BATCH_SIZE, num_units)
-                chunk_texts = texts[i:chunk_end]
-
-                result = model_obj.encode(
-                    chunk_texts,
-                    batch_size=BATCH_SIZE,
-                    normalize_embeddings=True,
-                    show_progress_bar=False
-                )
-                all_embeddings.extend(np.array(result, dtype=np.float32))
-
-                progress.update(task, completed=chunk_end)
-
-            embeddings_matrix = np.vstack(all_embeddings)
+            result = model_obj.encode(
+                texts,
+                batch_size=32,
+                normalize_embeddings=True,
+                show_progress_bar=False
+            )
+            embeddings_matrix = np.array(result, dtype=np.float32)
+            progress.update(task, completed=len(units))
     else:
         model_obj = get_model(model)
         result = model_obj.encode(
             texts,
-            batch_size=BATCH_SIZE,
+            batch_size=32,
             normalize_embeddings=True
         )
         embeddings_matrix = np.array(result, dtype=np.float32)
 
-    dimension = embeddings_matrix.shape[1]
-    index = faiss.IndexFlatIP(dimension)
-    index.add(embeddings_matrix)
+    # Build FAISS index (inner product for normalized vectors = cosine similarity)
+    if console:
+        with console.status("[bold green]Building FAISS index..."):
+            dimension = embeddings_matrix.shape[1]
+            index = faiss.IndexFlatIP(dimension)
+            index.add(embeddings_matrix)
+    else:
+        dimension = embeddings_matrix.shape[1]
+        index = faiss.IndexFlatIP(dimension)
+        index.add(embeddings_matrix)
 
     # Save index
     index_file = cache_dir / "index.faiss"
