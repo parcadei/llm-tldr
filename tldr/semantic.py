@@ -273,7 +273,6 @@ def extract_units_from_project(project_path: str, lang: str = "python", respect_
     units = []
 
     # Load ignore spec before getting structure
-    from tldr.tldrignore import load_ignore_patterns
     ignore_spec = load_ignore_patterns(project) if respect_ignore else None
 
     # Get code structure (L1) - use high limit for semantic index

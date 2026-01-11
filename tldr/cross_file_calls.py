@@ -1466,23 +1466,33 @@ def _parse_php_use_node(node, source: bytes, imports: list):
                     if group_child.type == "namespace_use_clause":
                         clause_text = source[group_child.start_byte:group_child.end_byte].decode("utf-8").strip()
                         # Handle alias: User as UserModel
-                        name = clause_text.split(" as ")[0].strip()
+                        parts = clause_text.split(" as ")
+                        name = parts[0].strip()
+                        alias = parts[1].strip() if len(parts) > 1 else None
                         full_module = f"{prefix}\\{name}" if prefix else name
-                        imports.append({
+                        import_info = {
                             'module': full_module,
                             'type': 'use',
-                        })
+                        }
+                        if alias:
+                            import_info['alias'] = alias
+                        imports.append(import_info)
     else:
         # Simple imports: use App\Models\User;
         for child in node.children:
             if child.type == "namespace_use_clause":
                 clause_text = source[child.start_byte:child.end_byte].decode("utf-8").strip()
                 # Handle alias: User as UserModel
-                module = clause_text.split(" as ")[0].strip()
-                imports.append({
+                parts = clause_text.split(" as ")
+                module = parts[0].strip()
+                alias = parts[1].strip() if len(parts) > 1 else None
+                import_info = {
                     'module': module,
                     'type': 'use',
-                })
+                }
+                if alias:
+                    import_info['alias'] = alias
+                imports.append(import_info)
 
 
 def _parse_php_require_include_node(node, source: bytes) -> dict | None:
