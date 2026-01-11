@@ -3025,18 +3025,6 @@ def _extract_php_file_calls(file_path: Path, root: Path) -> dict[str, list[tuple
                         callee = source[func_child.start_byte:func_child.end_byte].decode("utf-8")
                         calls.append(('direct', callee))
 
-            # Scoped call expression: ClassName::method()
-            elif node.type == "scoped_call_expression":
-                scope = node.child_by_field_name("scope")
-                name = node.child_by_field_name("name")
-                if scope and name:
-                    class_name = source[scope.start_byte:scope.end_byte].decode("utf-8")
-                    method_name = source[name.start_byte:name.end_byte].decode("utf-8")
-                    if class_name in defined_classes:
-                        calls.append(('intra', f"{class_name}::{method_name}"))
-                    else:
-                        calls.append(('static', f"{class_name}::{method_name}"))
-
             # Member call expression: $obj->method()
             elif node.type == "member_call_expression":
                 obj_node = node.child_by_field_name("object")
@@ -3720,7 +3708,7 @@ def _build_php_call_graph(
                         # Try to find directly in func_index
                         for key, file_path in func_index.items():
                             if isinstance(key, tuple) and len(key) == 2:
-                                mod, name = key
+                                _, name = key
                                 if name == call_target:
                                     graph.add_edge(rel_path, caller_func, file_path, call_target)
                                     break
@@ -3736,7 +3724,7 @@ def _build_php_call_graph(
                             # Look for Class::method in index
                             for key, file_path in func_index.items():
                                 if isinstance(key, tuple) and len(key) == 2:
-                                    mod, name = key
+                                    _, name = key
                                     if name == method or name == f"{resolved_class}::{method}":
                                         graph.add_edge(rel_path, caller_func, file_path, method)
                                         break
@@ -3750,7 +3738,7 @@ def _build_php_call_graph(
                                 # Search in index
                                 for key, file_path in func_index.items():
                                     if isinstance(key, tuple) and len(key) == 2:
-                                        mod, name = key
+                                        _, name = key
                                         if name == method:
                                             graph.add_edge(rel_path, caller_func, file_path, method)
                                             break
@@ -3765,7 +3753,7 @@ def _build_php_call_graph(
                             # Check if method exists in current file's functions
                             for key, file_path in func_index.items():
                                 if isinstance(key, tuple) and len(key) == 2:
-                                    mod, name = key
+                                    _, name = key
                                     if name == method and file_path == rel_path:
                                         graph.add_edge(rel_path, caller_func, rel_path, method)
                                         break
@@ -3773,7 +3761,7 @@ def _build_php_call_graph(
                             # Generic object method call - try to find method
                             for key, file_path in func_index.items():
                                 if isinstance(key, tuple) and len(key) == 2:
-                                    mod, name = key
+                                    _, name = key
                                     if name == method:
                                         graph.add_edge(rel_path, caller_func, file_path, method)
                                         break
