@@ -407,6 +407,25 @@ Semantic Search:
         "--json", action="store_true", help="Output as JSON"
     )
 
+    # tldr brain build/serve
+    brain_p = subparsers.add_parser(
+        "brain", help="Interactive project visualizer with semantic embeddings"
+    )
+    brain_sub = brain_p.add_subparsers(dest="action", required=True)
+
+    # tldr brain build [path] [--output FILE] [--cached]
+    brain_build_p = brain_sub.add_parser("build", help="Generate brain.json from project analysis")
+    brain_build_p.add_argument("path", nargs="?", default=".", help="Project root (default: current directory)")
+    brain_build_p.add_argument("--output", "-o", default="brain.json", help="Output file (default: brain.json)")
+    brain_build_p.add_argument("--lang", default="python", help="Language to analyze (default: python)")
+    brain_build_p.add_argument("--cached", action="store_true", help="Use cached semantic index if available")
+
+    # tldr brain serve [path] [--port PORT]
+    brain_serve_p = brain_sub.add_parser("serve", help="Start visualization server")
+    brain_serve_p.add_argument("path", nargs="?", default=".", help="Project root with brain.json (default: current directory)")
+    brain_serve_p.add_argument("--port", "-p", type=int, default=5000, help="Server port (default: 5000)")
+    brain_serve_p.add_argument("--no-build", action="store_true", help="Don't rebuild brain.json if already available")
+
     args = parser.parse_args()
 
     # Import here to avoid slow startup for --help
@@ -1032,6 +1051,44 @@ Semantic Search:
                 except (ConnectionRefusedError, FileNotFoundError):
                     # Daemon not running - silently ignore, file edits shouldn't fail
                     pass
+
+        elif args.command == "brain":
+            project_path = Path(args.path).resolve()
+            
+            if args.action == "build":
+                from scripts.build_brain import build_brain_for_project
+                output_path = Path(args.output)
+                if not output_path.is_absolute():
+                    output_path = project_path / args.output
+                
+                print(f"Building brain.json for {project_path}...")
+                build_brain_for_project(
+                    project_path=project_path,
+                    output_path=output_path,
+                    language=args.lang,
+                    use_cached=args.cached
+                )
+                print(f"✓ Brain dump saved to {output_path}")
+            
+            elif args.action == "serve":
+                brain_file = project_path / "brain.json"
+                
+                if not brain_file.exists() and not args.no_build:
+                    print("brain.json not found, building...")
+                    from scripts.build_brain import build_brain_for_project
+                    build_brain_for_project(project_path=project_path, output_path=brain_file)
+                
+                if not brain_file.exists():
+                    print(f"Error: {brain_file} not found. Run 'tldr brain build' first.", file=sys.stderr)
+                    sys.exit(1)
+                
+                # Start Flask server
+                print(f"Starting visualization server on http://127.0.0.1:{args.port}")
+                print("Press Ctrl+C to stop")
+                
+                from scripts.brain_server import create_app
+                app = create_app(project_path, brain_file)
+                app.run(host="127.0.0.1", port=args.port, debug=True)
 
     except FileNotFoundError as e:
         print(f"Error: {e}", file=sys.stderr)

@@ -1,0 +1,462 @@
+/* TLDR Brain v2 Styles */
+
+* {
+    box-sizing: border-box;
+}
+
+body {
+    margin: 0;
+    font-family: 'Segoe UI', system-ui, sans-serif;
+    overflow: hidden;
+    background: #0a0a1a;
+    color: #fff;
+}
+
+body.light-theme {
+    background: #f0f0f0;
+    color: #000;
+}
+
+#3d-graph {
+    width: 100vw;
+    height: 100vh;
+    position: absolute;
+    top: 0;
+    left: 0;
+    z-index: 0;
+}
+
+#ui-layer {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    pointer-events: none;
+    z-index: 1;
+}
+
+/* Header */
+header {
+    pointer-events: auto;
+    background: rgba(10, 10, 26, 0.9);
+    backdrop-filter: blur(10px);
+    padding: 0.75rem 1rem;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 1rem;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.light-theme header {
+    background: rgba(240, 240, 240, 0.9);
+    border-color: rgba(0, 0, 0, 0.1);
+}
+
+header h1 {
+    margin: 0;
+    font-size: 1.25rem;
+    font-weight: 600;
+}
+
+.view-toggle {
+    display: flex;
+    gap: 0.25rem;
+}
+
+.view-btn {
+    background: rgba(255, 255, 255, 0.1);
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    color: #fff;
+    padding: 0.5rem 1rem;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 0.85rem;
+    transition: all 0.2s;
+}
+
+.view-btn:hover {
+    background: rgba(255, 255, 255, 0.2);
+}
+
+.view-btn.active {
+    background: #007acc;
+    border-color: #007acc;
+}
+
+.search-box {
+    display: flex;
+    gap: 0.5rem;
+}
+
+.search-box input {
+    background: rgba(255, 255, 255, 0.1);
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    color: #fff;
+    padding: 0.5rem;
+    border-radius: 4px;
+    width: 200px;
+}
+
+.search-box button {
+    background: #007acc;
+    border: none;
+    color: white;
+    padding: 0.5rem 1rem;
+    border-radius: 4px;
+    cursor: pointer;
+}
+
+.search-box button:hover {
+    background: #005f9e;
+}
+
+.search-box button:disabled {
+    opacity: 0.5;
+}
+
+/* Panels */
+.panel {
+    pointer-events: auto;
+    background: rgba(10, 10, 26, 0.95);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 8px;
+    padding: 1rem;
+    backdrop-filter: blur(10px);
+}
+
+.light-theme .panel {
+    background: rgba(255, 255, 255, 0.95);
+    border-color: rgba(0, 0, 0, 0.1);
+}
+
+/* Sidebar */
+#sidebar {
+    position: absolute;
+    left: 1rem;
+    top: 70px;
+    width: 220px;
+    max-height: calc(100vh - 90px);
+    overflow-y: auto;
+}
+
+#sidebar h3,
+#sidebar h4 {
+    margin: 0 0 0.5rem 0;
+    font-size: 0.9rem;
+}
+
+#sidebar hr {
+    border: none;
+    border-top: 1px solid rgba(255, 255, 255, 0.1);
+    margin: 0.75rem 0;
+}
+
+.control-group {
+    margin-bottom: 0.5rem;
+}
+
+.control-group button {
+    display: block;
+    width: 100%;
+    margin-bottom: 0.25rem;
+    background: rgba(255, 255, 255, 0.1);
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    color: #fff;
+    padding: 0.4rem;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 0.8rem;
+    text-align: left;
+}
+
+.control-group button:hover {
+    background: rgba(255, 255, 255, 0.2);
+}
+
+.control-group label {
+    display: block;
+    font-size: 0.8rem;
+    margin-bottom: 0.2rem;
+}
+
+.control-group input[type="range"] {
+    width: 100%;
+}
+
+.control-group small {
+    display: block;
+    font-size: 0.7rem;
+    opacity: 0.7;
+    margin-top: 0.2rem;
+}
+
+.legend div {
+    font-size: 0.8rem;
+    margin: 0.2rem 0;
+}
+
+.info-btn {
+    float: right;
+    cursor: pointer;
+    opacity: 0.6;
+    font-size: 0.9em;
+    padding: 0 4px;
+    border-radius: 4px;
+    transition: all 0.2s;
+}
+
+.info-btn:hover {
+    opacity: 1;
+    background: rgba(255, 255, 255, 0.2);
+}
+
+.edge-legend {
+    margin-top: 0.5rem;
+    font-size: 0.8rem;
+}
+
+/* Details Panel */
+#details-panel {
+    position: absolute;
+    right: 1rem;
+    top: 70px;
+    width: 320px;
+    max-height: calc(100vh - 90px);
+    display: flex;
+    flex-direction: column;
+}
+
+#details-panel.hidden {
+    display: none;
+}
+
+#details-panel h2 {
+    margin: 0 0 0.5rem 0;
+    font-size: 1rem;
+    word-break: break-all;
+}
+
+#details-panel h4 {
+    margin: 0.5rem 0 0.25rem 0;
+    font-size: 0.9rem;
+}
+
+#node-meta {
+    font-size: 0.8rem;
+    line-height: 1.5;
+}
+
+#node-meta div {
+    margin: 0.2rem 0;
+}
+
+#node-source {
+    flex: 1;
+    overflow: auto;
+    background: rgba(0, 0, 0, 0.3);
+    padding: 0.5rem;
+    border-radius: 4px;
+    font-size: 0.7rem;
+    font-family: 'Consolas', monospace;
+    white-space: pre-wrap;
+    word-break: break-all;
+    max-height: 200px;
+    margin: 0;
+}
+
+.close-btn {
+    position: absolute;
+    top: 0.5rem;
+    right: 0.5rem;
+    background: transparent;
+    border: none;
+    color: #fff;
+    font-size: 1.5rem;
+    cursor: pointer;
+    line-height: 1;
+    opacity: 0.7;
+}
+
+.close-btn:hover {
+    opacity: 1;
+}
+
+/* Heatmap Panel */
+#heatmap-panel {
+    position: absolute;
+    right: 1rem;
+    bottom: 1rem;
+    width: 320px;
+    max-height: 280px;
+    overflow-y: auto;
+}
+
+#heatmap-panel.hidden {
+    display: none;
+}
+
+#heatmap-panel h3 {
+    margin: 0 0 0.25rem 0;
+    font-size: 0.95rem;
+}
+
+#heatmap-panel small {
+    display: block;
+    margin-bottom: 0.5rem;
+    opacity: 0.7;
+}
+
+.heatmap-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.75rem;
+}
+
+.heatmap-table th,
+.heatmap-table td {
+    padding: 0.25rem 0.3rem;
+    text-align: left;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.heatmap-table th {
+    font-weight: 600;
+    opacity: 0.8;
+    font-size: 0.7rem;
+}
+
+.clickable-row {
+    cursor: pointer;
+}
+
+.clickable-row:hover {
+    background: rgba(255, 255, 255, 0.1);
+}
+
+/* Code Comparison Panel */
+#comparison-panel {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    transform: translate(-50%, -50%);
+    width: 80%;
+    max-width: 900px;
+    max-height: 70vh;
+    display: flex;
+    flex-direction: column;
+}
+
+#comparison-panel.hidden {
+    display: none;
+}
+
+.comp-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding-bottom: 0.5rem;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+    margin-bottom: 0.5rem;
+}
+
+.comp-header span:first-child,
+.comp-header span:last-child {
+    font-weight: bold;
+    font-size: 0.9rem;
+}
+
+#comp-similarity {
+    background: #007acc;
+    padding: 0.25rem 0.5rem;
+    border-radius: 4px;
+    font-size: 0.8rem;
+}
+
+.comp-container {
+    display: flex;
+    gap: 0.5rem;
+    flex: 1;
+    min-height: 0;
+}
+
+.comp-code {
+    flex: 1;
+    overflow: auto;
+    background: rgba(0, 0, 0, 0.4);
+    padding: 0.5rem;
+    border-radius: 4px;
+    font-size: 0.7rem;
+    font-family: 'Consolas', monospace;
+    white-space: pre-wrap;
+    word-break: break-all;
+    max-height: 300px;
+    margin: 0;
+}
+
+/* Info Modal */
+.info-modal {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: rgba(0, 0, 0, 0.7);
+    display: none;
+    justify-content: center;
+    align-items: center;
+    z-index: 1000;
+    pointer-events: auto;
+}
+
+.info-modal.visible {
+    display: flex;
+}
+
+.info-modal-content {
+    background: #1a1a2e;
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    border-radius: 8px;
+    padding: 1.5rem;
+    max-width: 400px;
+    text-align: center;
+}
+
+.info-modal-content p {
+    margin: 0 0 1rem 0;
+    font-size: 0.9rem;
+    line-height: 1.5;
+    white-space: pre-wrap;
+}
+
+.info-modal-content button {
+    background: #007acc;
+    border: none;
+    color: white;
+    padding: 0.5rem 1.5rem;
+    border-radius: 4px;
+    cursor: pointer;
+}
+
+.info-modal-content button:hover {
+    background: #005f9e;
+}
+
+/* Scrollbar */
+::-webkit-scrollbar {
+    width: 6px;
+}
+
+::-webkit-scrollbar-track {
+    background: rgba(255, 255, 255, 0.05);
+}
+
+::-webkit-scrollbar-thumb {
+    background: rgba(255, 255, 255, 0.2);
+    border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+    background: rgba(255, 255, 255, 0.3);
+}

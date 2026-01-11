@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TLDR Brain v2</title>
+    <script src="//unpkg.com/3d-force-graph"></script>
+    <script src="//unpkg.com/three@0.160.0/build/three.min.js"></script>
+    <link rel="stylesheet" href="style.css">
+</head>
+
+<body>
+    <div id="3d-graph"></div>
+
+    <div id="ui-layer">
+        <!-- Header -->
+        <header>
+            <h1>🧠 TLDR Brain</h1>
+            <div class="view-toggle">
+                <button id="btn-force" class="view-btn active" onclick="setView('force')">🔀 Force-Flow</button>
+                <button id="btn-semantic" class="view-btn" onclick="setView('semantic')">🧠 Semantic</button>
+                <button id="btn-hybrid" class="view-btn" onclick="setView('hybrid')">🔮 Hybrid</button>
+            </div>
+            <div class="search-box">
+                <input type="text" id="semantic-search" placeholder="Ask your codebase...">
+                <button onclick="performSearch()">Ask</button>
+            </div>
+        </header>
+
+        <!-- Left Sidebar -->
+        <div id="sidebar" class="panel">
+            <h3>Controls</h3>
+
+            <div class="control-group">
+                <button onclick="toggleTheme()">🌓 Theme <span class="info-btn"
+                        data-info="toggle-theme">ℹ️</span></button>
+                <button onclick="Graph.zoomToFit(500)">🔍 Zoom to Fit <span class="info-btn"
+                        data-info="zoom-fit">ℹ️</span></button>
+                <button onclick="toggleClusterSpheres()">💠 Cluster Spheres <span class="info-btn"
+                        data-info="cluster-spheres">ℹ️</span></button>
+                <button onclick="toggleHeatmap()">📊 Similarity Map <span class="info-btn"
+                        data-info="similarity-map">ℹ️</span></button>
+            </div>
+
+            <div id="blend-control" class="control-group" style="display:none;">
+                <label>Hybrid Blend: <span id="blend-value">50%</span> <span class="info-btn"
+                        data-info="blend-control">ℹ️</span></label>
+                <input type="range" min="0" max="1" step="0.1" value="0.5" oninput="setBlend(this.value)">
+                <small>← Structure | Semantic →</small>
+            </div>
+
+            <div class="control-group">
+                <label>Centrality Filter: <span id="centrality-value">0.5%</span> <span class="info-btn"
+                        data-info="centrality-filter">ℹ️</span></label>
+                <input type="range" min="0" max="0.1" step="0.001" value="0.005"
+                    oninput="filterByCentrality(this.value)">
+            </div>
+
+            <hr>
+            <h4>Node Size Weights <span class="info-btn" data-info="weight-pagerank">ℹ️</span></h4>
+            <div class="control-group">
+                <label>PageRank: <span id="val-pagerank">0.6</span></label>
+                <input type="range" id="weight-pagerank" min="0" max="1" step="0.1" value="0.6"
+                    oninput="updateWeights()">
+            </div>
+            <div class="control-group">
+                <label>Neighbor Influence: <span id="val-influence">0.2</span> <span class="info-btn"
+                        data-info="weight-influence">ℹ️</span></label>
+                <input type="range" id="weight-influence" min="0" max="1" step="0.1" value="0.2"
+                    oninput="updateWeights()">
+            </div>
+            <div class="control-group">
+                <label>Neighbor Support: <span id="val-support">0.2</span> <span class="info-btn"
+                        data-info="weight-support">ℹ️</span></label>
+                <input type="range" id="weight-support" min="0" max="1" step="0.1" value="0.2"
+                    oninput="updateWeights()">
+            </div>
+
+            <hr>
+            <h4>Legend <span class="info-btn" data-info="legend">ℹ️</span></h4>
+            <div class="legend">
+                <div><span style="color:#00ff88">●</span> Entry Points</div>
+                <div><span style="color:#00aaff">●</span> Workflow Logic</div>
+                <div><span style="color:#ff8800">●</span> Utilities/Leaves</div>
+                <div><span style="color:#888888">●</span> Unknown</div>
+            </div>
+            <small>Colors = clusters | Click node: <span style="color:#ff6464">● in</span> <span style="color:#50a0ff">●
+                    out</span></small>
+        </div>
+
+        <!-- Right Details Panel -->
+        <div id="details-panel" class="panel hidden">
+            <button class="close-btn" onclick="closeDetails()">×</button>
+            <h2 id="node-label">Select a node</h2>
+            <div id="node-meta"></div>
+            <h4>Source Preview</h4>
+            <pre id="node-source"></pre>
+        </div>
+
+        <!-- Heatmap Panel -->
+        <div id="heatmap-panel" class="panel hidden">
+            <button class="close-btn" onclick="toggleHeatmap()">×</button>
+            <h3>📊 Similar Code Pairs</h3>
+            <small>Click a row to compare code side-by-side</small>
+            <div id="heatmap-container"></div>
+        </div>
+
+        <!-- Code Comparison Panel -->
+        <div id="comparison-panel" class="panel hidden">
+            <button class="close-btn" onclick="closeComparison()">×</button>
+            <div class="comp-header">
+                <span id="comp-src-label">Source</span>
+                <span id="comp-similarity">vs</span>
+                <span id="comp-tgt-label">Target</span>
+            </div>
+            <div class="comp-container">
+                <pre id="comp-src-code" class="comp-code"></pre>
+                <pre id="comp-tgt-code" class="comp-code"></pre>
+            </div>
+        </div>
+    </div>
+
+    <script src="brain.js"></script>
+</body>
+
+</html>
