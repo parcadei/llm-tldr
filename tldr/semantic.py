@@ -272,8 +272,7 @@ def extract_units_from_project(project_path: str, lang: str = "python", respect_
     project = Path(project_path).resolve()
     units = []
 
-    # Get code structure (L1)
-    structure = get_code_structure(str(project), language=lang)
+    structure = get_code_structure(str(project), language=lang, max_results=100000)
 
     # Filter ignored files
     if respect_ignore:
