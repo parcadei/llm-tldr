@@ -249,7 +249,7 @@ def compute_embedding(text: str, model_name: Optional[str] = None):
     return np.array(embedding, dtype=np.float32)
 
 
-def extract_units_from_project(project_path: str, lang: str = "python", respect_ignore: bool = True) -> List[EmbeddingUnit]:
+def extract_units_from_project(project_path: str, lang: str = "python", respect_ignore: bool = True, progress_callback=None) -> List[EmbeddingUnit]:
     """Extract all functions/methods/classes from a project.
 
     Uses existing TLDR APIs:
@@ -335,14 +335,14 @@ def extract_units_from_project(project_path: str, lang: str = "python", respect_
                 for future in as_completed(futures):
                     file_info = futures[future]
                     try:
-                        file_units = future.result(timeout=60)  # 60s per file timeout
+                        file_units = future.result(timeout=60)
                         units.extend(file_units)
+                        if progress_callback:
+                            progress_callback(file_info.get('path', 'unknown'), len(units), len(files))
                     except Exception as e:
                         logger.warning(f"Failed to process {file_info.get('path', 'unknown')}: {e}")
-                        # Continue with other files
 
         except Exception as e:
-            # Fallback to sequential if parallel fails
             logger.warning(f"Parallel extraction failed: {e}, falling back to sequential")
             for file_info in files:
                 try:
@@ -350,16 +350,19 @@ def extract_units_from_project(project_path: str, lang: str = "python", respect_
                         file_info, str(project), lang, calls_map, called_by_map
                     )
                     units.extend(file_units)
+                    if progress_callback:
+                        progress_callback(file_info.get('path', 'unknown'), len(units), len(files))
                 except Exception as fe:
                     logger.warning(f"Failed to process {file_info.get('path', 'unknown')}: {fe}")
     else:
-        # Sequential processing for single file or when parallel is disabled
         for file_info in files:
             try:
                 file_units = _process_file_for_extraction(
                     file_info, str(project), lang, calls_map, called_by_map
                 )
                 units.extend(file_units)
+                if progress_callback:
+                    progress_callback(file_info.get('path', 'unknown'), len(units), len(files))
             except Exception as e:
                 logger.warning(f"Failed to process {file_info.get('path', 'unknown')}: {e}")
 
@@ -884,8 +887,11 @@ def build_semantic_index(
     # Extract all units (respecting .tldrignore)
     if console:
         with console.status("[bold green]Extracting code units...") as status:
+            def update_progress(file_path, units_count, total_files):
+                short_path = file_path if len(file_path) < 50 else "..." + file_path[-47:]
+                status.update(f"[bold green]Processing {short_path}... ({units_count} units)")
+
             if lang == "all":
-                # Optimization: detect which languages are actually present
                 status.update("[bold green]Scanning project languages...")
                 target_languages = _detect_project_languages(project, respect_ignore=respect_ignore)
                 if not target_languages:
@@ -897,9 +903,9 @@ def build_semantic_index(
                 units = []
                 for lang_name in target_languages:
                     status.update(f"[bold green]Extracting {lang_name} code units...")
-                    units.extend(extract_units_from_project(str(project), lang=lang_name, respect_ignore=respect_ignore))
+                    units.extend(extract_units_from_project(str(project), lang=lang_name, respect_ignore=respect_ignore, progress_callback=update_progress))
             else:
-                units = extract_units_from_project(str(project), lang=lang, respect_ignore=respect_ignore)
+                units = extract_units_from_project(str(project), lang=lang, respect_ignore=respect_ignore, progress_callback=update_progress)
             status.update(f"[bold green]Extracted {len(units)} code units")
     else:
         if lang == "all":
