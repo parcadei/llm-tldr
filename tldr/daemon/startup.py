@@ -5,7 +5,6 @@ Uses file locking to prevent race conditions when multiple processes
 try to start the daemon simultaneously.
 """
 
-import fcntl
 import hashlib
 import json
 import logging
@@ -13,7 +12,15 @@ import os
 import socket
 import sys
 import time
+import platform
+import tempfile
 from pathlib import Path
+
+# Conditional imports
+if os.name == "nt":
+    import msvcrt
+else:
+    import fcntl
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -25,7 +32,8 @@ logger = logging.getLogger(__name__)
 def _get_lock_path(project: Path) -> Path:
     """Get lock file path for daemon startup synchronization."""
     hash_val = hashlib.md5(str(project).encode()).hexdigest()[:8]
-    return Path(f"/tmp/tldr-{hash_val}.lock")
+    temp_dir = Path(tempfile.gettempdir())
+    return temp_dir / f"tldr-{hash_val}.lock"
 
 
 def _is_daemon_alive(project: Path, retries: int = 3, delay: float = 0.1) -> bool:

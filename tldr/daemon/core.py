@@ -13,6 +13,7 @@ import signal
 import socket
 import sys
 import time
+import tempfile
 from pathlib import Path
 from typing import Any, Optional
 
@@ -104,7 +105,8 @@ class TLDRDaemon:
     def _compute_socket_path(self) -> Path:
         """Compute deterministic socket path from project path."""
         hash_val = hashlib.md5(str(self.project).encode()).hexdigest()[:8]
-        return Path(f"/tmp/tldr-{hash_val}.sock")
+        temp_dir = Path(tempfile.gettempdir())
+        return temp_dir / f"tldr-{hash_val}.sock"
 
     def _load_semantic_config(self) -> dict:
         """Load semantic search configuration.
