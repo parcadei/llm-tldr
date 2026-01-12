@@ -310,6 +310,29 @@ For AI tools (Claude Desktop, Claude Code):
 }
 ```
 
+## Agent Skill (agentskills.io)
+
+TLDR is also available as an [Agent Skill](https://agentskills.io) for Claude Code and compatible agents.
+
+**Install via skill directory:**
+```bash
+# Copy to your Claude Code skills folder
+cp -r skill/ ~/.claude/skills/llm-tldr/
+```
+
+**Or reference from project:**
+```bash
+# Symlink for project-specific use
+ln -s /path/to/llm-tldr/skill .claude/skills/llm-tldr
+```
+
+The skill teaches Claude *when* to use TLDR commands based on your queries:
+- "Find code that validates tokens" → `tldr semantic search "validate tokens"`
+- "What calls this function?" → `tldr impact <function> .`
+- "What affects line 42?" → `tldr slice <file> <func> 42`
+
+See [`skill/SKILL.md`](skill/SKILL.md) for the complete skill definition.
+
 ---
 
 ## Configuration
