@@ -123,8 +123,8 @@ def _find_project_root(start_path: str | Path) -> Path:
             return search
         search = search.parent
 
-    # No markers found - return the original resolved path
-    return Path(start_path).resolve()
+    # No markers found - return the resolved directory (not file if input was file)
+    return current
 
 
 def _detect_project_language(path: str) -> str:
