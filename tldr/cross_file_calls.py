@@ -1907,50 +1907,61 @@ def _index_single_file(args: tuple[str, str, str]) -> dict:
     Worker function for parallel file indexing.
 
     Must be at module level for ProcessPoolExecutor pickling.
+    Wrapped in try/except to prevent one file's failure from crashing the pool.
 
     Args:
         args: Tuple of (src_file_path, root_path, language)
 
     Returns:
-        Partial index dict for this single file
+        Partial index dict for this single file, empty dict on error
     """
-    src_file, root_str, language = args
-    root = Path(root_str)
-    src_path = Path(src_file)
-
     try:
-        rel_path = src_path.relative_to(root)
-    except ValueError:
+        src_file, root_str, language = args
+        root = Path(root_str)
+        src_path = Path(src_file)
+
+        try:
+            rel_path = src_path.relative_to(root)
+        except ValueError:
+            return {}
+
+        # Derive module name from file path
+        module_parts = list(rel_path.parts[:-1]) + [rel_path.stem]
+        module_name = (
+            "/".join(module_parts)
+            if language == "typescript"
+            else ".".join(module_parts)
+        )
+        simple_module = rel_path.stem
+
+        # Create local index for this file
+        partial_index: dict = {}
+
+        if language == "python":
+            _index_python_file(
+                src_path, rel_path, module_name, simple_module, partial_index
+            )
+        elif language == "typescript":
+            _index_typescript_file(
+                src_path, rel_path, module_name, simple_module, partial_index
+            )
+        elif language == "go":
+            _index_go_file(src_path, rel_path, module_name, simple_module, partial_index)
+        elif language == "rust":
+            _index_rust_file(
+                src_path, rel_path, module_name, simple_module, partial_index
+            )
+        elif language == "java":
+            _index_java_file(
+                src_path, rel_path, module_name, simple_module, partial_index
+            )
+        elif language == "c":
+            _index_c_file(src_path, rel_path, module_name, simple_module, partial_index)
+
+        return partial_index
+    except Exception:
+        # Don't let one file's failure crash the entire pool
         return {}
-
-    # Derive module name from file path
-    module_parts = list(rel_path.parts[:-1]) + [rel_path.stem]
-    module_name = (
-        "/".join(module_parts) if language == "typescript" else ".".join(module_parts)
-    )
-    simple_module = rel_path.stem
-
-    # Create local index for this file
-    partial_index: dict = {}
-
-    if language == "python":
-        _index_python_file(
-            src_path, rel_path, module_name, simple_module, partial_index
-        )
-    elif language == "typescript":
-        _index_typescript_file(
-            src_path, rel_path, module_name, simple_module, partial_index
-        )
-    elif language == "go":
-        _index_go_file(src_path, rel_path, module_name, simple_module, partial_index)
-    elif language == "rust":
-        _index_rust_file(src_path, rel_path, module_name, simple_module, partial_index)
-    elif language == "java":
-        _index_java_file(src_path, rel_path, module_name, simple_module, partial_index)
-    elif language == "c":
-        _index_c_file(src_path, rel_path, module_name, simple_module, partial_index)
-
-    return partial_index
 
 
 def build_function_index(
@@ -3248,6 +3259,7 @@ def _process_python_file_for_callgraph(args: tuple[str, str]) -> dict:
 
     Extracts imports and function calls from a single Python file.
     Must be at module level for ProcessPoolExecutor compatibility.
+    Wrapped in try/except to prevent one file's failure from crashing the pool.
 
     Args:
         args: Tuple of (py_file_path, root_path) as strings for pickle compatibility
@@ -3255,30 +3267,41 @@ def _process_python_file_for_callgraph(args: tuple[str, str]) -> dict:
     Returns:
         Dict with keys: file, rel_path, imports, calls_by_func
     """
-    py_file, root_str = args
-    py_path = Path(py_file)
-    root = Path(root_str)
-
     try:
-        rel_path = str(py_path.relative_to(root))
-    except ValueError:
-        # File is not under root (shouldn't happen, but be safe)
+        py_file, root_str = args
+        py_path = Path(py_file)
+        root = Path(root_str)
+
+        try:
+            rel_path = str(py_path.relative_to(root))
+        except ValueError:
+            # File is not under root (shouldn't happen, but be safe)
+            return {
+                "file": py_file,
+                "rel_path": py_file,
+                "imports": [],
+                "calls_by_func": {},
+            }
+
+        imports = parse_imports(py_path)
+        calls_by_func = _extract_file_calls(py_path, root)
+
+        return {
+            "file": py_file,
+            "rel_path": rel_path,
+            "imports": imports,
+            "calls_by_func": calls_by_func,
+        }
+    except Exception:
+        # Don't let one file's failure crash the entire pool
+        # Return empty data structure so processing can continue
+        py_file = args[0] if args else "<unknown>"
         return {
             "file": py_file,
             "rel_path": py_file,
             "imports": [],
             "calls_by_func": {},
         }
-
-    imports = parse_imports(py_path)
-    calls_by_func = _extract_file_calls(py_path, root)
-
-    return {
-        "file": py_file,
-        "rel_path": rel_path,
-        "imports": imports,
-        "calls_by_func": calls_by_func,
-    }
 
 
 def _build_python_call_graph(

@@ -365,7 +365,8 @@ class SalsaDB:
             return
 
         # Track in pending deps (for queries still being computed)
-        if hasattr(self, "_pending_deps") and parent_key in self._pending_deps:
+        # Note: _pending_deps is always available (it's a property returning thread-local dict)
+        if parent_key in self._pending_deps:
             self._pending_deps[parent_key].add(child_key)
 
         # Track in cached entry (for queries already computed)

@@ -94,6 +94,11 @@ IDLE_TIMEOUT = int(os.environ.get("TLDR_IDLE_TIMEOUT", 30 * 60))
 # infinite data without newline terminator
 MAX_REQUEST_SIZE = 10 * 1024 * 1024
 
+# Maximum response size: 50MB - prevents OOM from malicious/buggy daemon sending
+# infinite data without newline terminator. Larger than request since responses
+# (e.g., call graphs, search results) can be substantial.
+MAX_RESPONSE_SIZE = 50 * 1024 * 1024
+
 # Client socket timeout: 30 seconds - prevents indefinite blocking when
 # daemon hangs or becomes unresponsive
 CLIENT_SOCKET_TIMEOUT = 30.0
@@ -1604,6 +1609,9 @@ def query_daemon(project_path: str | Path, command: dict) -> dict:
     Returns:
         Response dict from daemon
 
+    Raises:
+        RuntimeError: If response exceeds MAX_RESPONSE_SIZE (50MB)
+
     Note:
         Uses chunked reading to handle large responses that exceed
         the initial recv buffer size.
@@ -1621,6 +1629,11 @@ def query_daemon(project_path: str | Path, command: dict) -> dict:
             if not chunk:
                 break
             response += chunk
+            # Security: Prevent OOM from malicious/buggy daemon sending infinite data
+            if len(response) > MAX_RESPONSE_SIZE:
+                raise RuntimeError(
+                    f"Response exceeded {MAX_RESPONSE_SIZE} bytes, aborting"
+                )
             if b"\n" in response:
                 break
         return _json_loads(response)

@@ -755,35 +755,54 @@ def _get_dfg_summary(
 # Cached wrappers for CFG/DFG extraction to avoid repeated file I/O and parsing.
 # Uses string paths (hashable) as cache keys.
 # Cache size of 1000 handles typical project sizes; entries evicted LRU when exceeded.
+# NOTE: mtime_ns is included in cache key to auto-invalidate on file changes.
+
+
+def _get_file_mtime_ns(file_path: Path) -> int:
+    """Get file modification time in nanoseconds, or 0 if unavailable."""
+    try:
+        return file_path.stat().st_mtime_ns
+    except (OSError, IOError):
+        return 0
 
 
 @lru_cache(maxsize=1000)
-def _get_cfg_summary_cached(file_path_str: str, func_name: str, lang: str) -> str:
+def _get_cfg_summary_cached(
+    file_path_str: str, func_name: str, lang: str, mtime_ns: int
+) -> str:
     """Cached version of CFG summary extraction.
 
     Args:
         file_path_str: String path to the file (must be string for hashability).
         func_name: Name of the function to analyze.
         lang: Programming language.
+        mtime_ns: File modification time in nanoseconds (for cache invalidation).
 
     Returns:
         CFG summary string (complexity and block count).
     """
+    # mtime_ns is only used as cache key - not passed to inner function
+    _ = mtime_ns
     return _get_cfg_summary(Path(file_path_str), func_name, lang)
 
 
 @lru_cache(maxsize=1000)
-def _get_dfg_summary_cached(file_path_str: str, func_name: str, lang: str) -> str:
+def _get_dfg_summary_cached(
+    file_path_str: str, func_name: str, lang: str, mtime_ns: int
+) -> str:
     """Cached version of DFG summary extraction.
 
     Args:
         file_path_str: String path to the file (must be string for hashability).
         func_name: Name of the function to analyze.
         lang: Programming language.
+        mtime_ns: File modification time in nanoseconds (for cache invalidation).
 
     Returns:
         DFG summary string (variable count and def-use chains).
     """
+    # mtime_ns is only used as cache key - not passed to inner function
+    _ = mtime_ns
     return _get_dfg_summary(Path(file_path_str), func_name, lang)
 
 

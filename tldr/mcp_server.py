@@ -266,7 +266,6 @@ def extract(file: str) -> dict:
 
 
 @mcp.tool()
-@mcp_error_handler
 def context(project: str, entry: str, depth: int = 2, language: str = "python") -> str:
     """Get token-efficient LLM context starting from an entry point.
 
@@ -280,19 +279,25 @@ def context(project: str, entry: str, depth: int = 2, language: str = "python") 
         language: Programming language
 
     Returns:
-        LLM-ready formatted context string
+        LLM-ready formatted context string (including error messages as strings)
     """
-    result = _send_command(
-        project,
-        {"cmd": "context", "entry": entry, "depth": depth, "language": language},
-    )
-    # Return formatted string for LLM consumption
-    if result.get("status") == "ok":
-        ctx = result.get("result", {})
-        if hasattr(ctx, "to_llm_string"):
-            return ctx.to_llm_string()
-        return str(ctx)
-    return str(result)
+    try:
+        result = _send_command(
+            project,
+            {"cmd": "context", "entry": entry, "depth": depth, "language": language},
+        )
+        # Return formatted string for LLM consumption
+        if result.get("status") == "ok":
+            ctx = result.get("result", {})
+            if hasattr(ctx, "to_llm_string"):
+                return ctx.to_llm_string()
+            return str(ctx)
+        # Error from daemon - return as string to maintain type consistency
+        return f"Error: {result.get('message', str(result))}"
+    except RuntimeError as e:
+        return f"Error: {e}"
+    except Exception as e:
+        return f"Unexpected error: {type(e).__name__}: {e}"
 
 
 # === FLOW ANALYSIS TOOLS ===

@@ -22,7 +22,9 @@ Usage:
     mark_dirty_batch(project_path, ["src/a.py", "src/b.py", "src/c.py"])
 """
 
+import os
 import sys
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterable, List, Set, Union
@@ -32,21 +34,31 @@ from typing import Any, Callable, Iterable, List, Set, Union
 _lock_file: Callable[[object], None]
 _unlock_file: Callable[[object], None]
 
+# Lock size for Windows - 1MB covers most dirty.json files
+# (msvcrt.locking requires explicit byte count unlike fcntl.flock)
+_WINDOWS_LOCK_SIZE = 1024 * 1024
+
 if sys.platform == "win32":
     try:
         import msvcrt
 
         def _lock_file(f: object) -> None:
-            """Acquire exclusive lock on file (Windows)."""
+            """Acquire exclusive lock on file (Windows).
+
+            Locks up to 1MB from current position. This is sufficient for
+            dirty.json files which are typically <100KB.
+            """
             try:
-                msvcrt.locking(f.fileno(), msvcrt.LK_LOCK, 1)  # type: ignore[union-attr]
+                f.seek(0)  # type: ignore[union-attr]
+                msvcrt.locking(f.fileno(), msvcrt.LK_LOCK, _WINDOWS_LOCK_SIZE)  # type: ignore[union-attr]
             except (OSError, IOError):
                 pass  # Best effort - continue without lock
 
         def _unlock_file(f: object) -> None:
             """Release lock on file (Windows)."""
             try:
-                msvcrt.locking(f.fileno(), msvcrt.LK_UNLCK, 1)  # type: ignore[union-attr]
+                f.seek(0)  # type: ignore[union-attr]
+                msvcrt.locking(f.fileno(), msvcrt.LK_UNLCK, _WINDOWS_LOCK_SIZE)  # type: ignore[union-attr]
             except (OSError, IOError):
                 pass  # Ignore unlock errors
 
@@ -64,11 +76,17 @@ else:
 
         def _lock_file(f: object) -> None:
             """Acquire exclusive lock on file (Unix)."""
-            fcntl.flock(f.fileno(), fcntl.LOCK_EX)  # type: ignore[union-attr]
+            try:
+                fcntl.flock(f.fileno(), fcntl.LOCK_EX)  # type: ignore[union-attr]
+            except (OSError, IOError):
+                pass  # Best effort - continue without lock (consistent with Windows)
 
         def _unlock_file(f: object) -> None:
             """Release lock on file (Unix)."""
-            fcntl.flock(f.fileno(), fcntl.LOCK_UN)  # type: ignore[union-attr]
+            try:
+                fcntl.flock(f.fileno(), fcntl.LOCK_UN)  # type: ignore[union-attr]
+            except (OSError, IOError):
+                pass  # Ignore unlock errors
 
     except ImportError:
         # Fallback for exotic Unix-like systems without fcntl
@@ -137,6 +155,7 @@ def _mark_dirty_impl(
 
     Uses set for O(1) membership checks and supports batch operations.
     File locking prevents TOCTOU race conditions in concurrent access.
+    Atomic write via temp file + rename prevents data loss on crash.
 
     Args:
         project_path: Root directory of the project
@@ -186,10 +205,25 @@ def _mark_dirty_impl(
                 data["dirty_files"] = list(existing_files | normalized_files)
                 data["last_dirty_at"] = now
 
-                # Write back atomically (truncate and rewrite)
-                f.seek(0)
-                f.truncate()
-                f.write(_json_dumps(data))
+                # Atomic write: temp file + rename prevents data loss on crash
+                # Write to temp file in same directory (ensures same filesystem)
+                fd, tmp_path = tempfile.mkstemp(
+                    dir=dirty_path.parent, suffix=".tmp", prefix="dirty_"
+                )
+                try:
+                    with os.fdopen(fd, "w") as tmp_file:
+                        tmp_file.write(_json_dumps(data))
+                        tmp_file.flush()
+                        os.fsync(tmp_file.fileno())  # Ensure data hits disk
+                    # Atomic rename (POSIX guarantees atomicity on same filesystem)
+                    os.replace(tmp_path, dirty_path)
+                except Exception:
+                    # Clean up temp file on failure
+                    try:
+                        os.unlink(tmp_path)
+                    except OSError:
+                        pass
+                    raise
         finally:
             _unlock_file(f)
 

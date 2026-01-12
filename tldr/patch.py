@@ -71,13 +71,19 @@ except ImportError:
 
 
 # Performance-optimized hashing with blake3 fallback
+# HASH_ALGORITHM is stored in cache to detect when algorithm changes
+# (e.g., blake3 installed/uninstalled), triggering cache invalidation
 try:
     import blake3
+
+    HASH_ALGORITHM = "blake3"
 
     def _hash_bytes(data: bytes) -> str:
         return blake3.blake3(data).hexdigest()
 except ImportError:
     import hashlib
+
+    HASH_ALGORITHM = "sha1"
 
     def _hash_bytes(data: bytes) -> str:
         return hashlib.sha1(data).hexdigest()
@@ -460,6 +466,9 @@ def get_file_info_cache(project_root: str) -> dict[str, FileInfo]:
     This is the recommended cache function as it enables mtime-based
     fast path for change detection (~99.8% savings for unchanged files).
 
+    If the cache was created with a different hash algorithm (e.g., sha1 vs blake3),
+    the cache is invalidated and an empty dict is returned to force re-hashing.
+
     Args:
         project_root: Project root directory
 
@@ -476,9 +485,19 @@ def get_file_info_cache(project_root: str) -> dict[str, FileInfo]:
         # Validate JSON structure is a dict before calling .items()
         if not isinstance(raw_data, dict):
             return {}
+
+        # Check hash algorithm compatibility - invalidate cache if algorithm changed
+        # This prevents stale cache hits when switching between blake3 and sha1
+        cached_algorithm = raw_data.get("_algorithm")
+        if cached_algorithm != HASH_ALGORITHM:
+            return {}  # Force re-hash with current algorithm
+
         # Convert raw dict entries to FileInfo objects
         result: dict[str, FileInfo] = {}
         for path, info in raw_data.items():
+            # Skip metadata keys (start with underscore)
+            if path.startswith("_"):
+                continue
             if isinstance(path, str) and isinstance(info, dict):
                 hash_val = info.get("hash")
                 mtime_val = info.get("mtime_ns")
@@ -492,6 +511,9 @@ def get_file_info_cache(project_root: str) -> dict[str, FileInfo]:
 def save_file_info_cache(project_root: str, cache: dict[str, FileInfo]) -> None:
     """Save file info cache (hash + mtime) to project cache directory.
 
+    Includes the hash algorithm identifier so cache can be invalidated
+    when the algorithm changes (e.g., blake3 installed/uninstalled).
+
     Args:
         project_root: Project root directory
         cache: Dict mapping relative file paths to FileInfo objects
@@ -500,10 +522,16 @@ def save_file_info_cache(project_root: str, cache: dict[str, FileInfo]) -> None:
     cache_path.parent.mkdir(parents=True, exist_ok=True)
 
     # Convert FileInfo objects to dicts for JSON serialization
-    raw_data = {
-        path: {"hash": info.hash, "mtime_ns": info.mtime_ns}
-        for path, info in cache.items()
+    # Include algorithm metadata for cache compatibility check
+    raw_data: dict[str, object] = {
+        "_algorithm": HASH_ALGORITHM,  # Metadata for cache compatibility check
     }
+    raw_data.update(
+        {
+            path: {"hash": info.hash, "mtime_ns": info.mtime_ns}
+            for path, info in cache.items()
+        }
+    )
     cache_path.write_bytes(_json_dumps(raw_data))
 
 
