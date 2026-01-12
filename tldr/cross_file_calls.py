@@ -3041,6 +3041,18 @@ def _extract_php_file_calls(file_path: Path, root: Path) -> dict[str, list[tuple
                     else:
                         calls.append(('attr', f"{obj_name}->{method_name}"))
 
+            # Top-level static method call: User::find() - scoped_call_expression is standalone
+            elif node.type == "scoped_call_expression":
+                # Extract class name and method name from children
+                names = [c for c in node.children if c.type == "name"]
+                if len(names) >= 2:
+                    class_name = source[names[0].start_byte:names[0].end_byte].decode("utf-8")
+                    method_name = source[names[1].start_byte:names[1].end_byte].decode("utf-8")
+                    if class_name in defined_classes:
+                        calls.append(('intra', f"{class_name}::{method_name}"))
+                    else:
+                        calls.append(('static', f"{class_name}::{method_name}"))
+
             for child in node.children:
                 visit_calls(child)
 
