@@ -267,7 +267,7 @@ Semantic Search:
     # tldr calls <path>
     calls_p = subparsers.add_parser("calls", help="Build cross-file call graph")
     calls_p.add_argument("path", nargs="?", default=".", help="Project root")
-    calls_p.add_argument("--lang", default="python", help="Language")
+    calls_p.add_argument("--lang", default="auto", help="Language (auto=cached, all=detect)")
 
     # tldr impact <func> [path]
     impact_p = subparsers.add_parser(
@@ -278,7 +278,7 @@ Semantic Search:
     impact_p.add_argument("--project", dest="project_path", default=".", help="Project root (alternative to positional path)")
     impact_p.add_argument("--depth", type=int, default=3, help="Max depth (default: 3)")
     impact_p.add_argument("--file", help="Filter by file containing this string")
-    impact_p.add_argument("--lang", default="python", help="Language")
+    impact_p.add_argument("--lang", default="auto", help="Language (auto=cached, all=detect)")
 
     # tldr dead [path]
     dead_p = subparsers.add_parser("dead", help="Find unreachable (dead) code")
@@ -286,14 +286,14 @@ Semantic Search:
     dead_p.add_argument(
         "--entry", nargs="*", default=[], help="Additional entry point patterns"
     )
-    dead_p.add_argument("--lang", default="python", help="Language")
+    dead_p.add_argument("--lang", default="auto", help="Language (auto=cached, all=detect)")
 
     # tldr arch [path]
     arch_p = subparsers.add_parser(
         "arch", help="Detect architectural layers from call patterns"
     )
     arch_p.add_argument("path", nargs="?", default=".", help="Project root")
-    arch_p.add_argument("--lang", default="python", help="Language")
+    arch_p.add_argument("--lang", default="auto", help="Language (auto=cached, all=detect)")
 
     # tldr imports <file>
     imports_p = subparsers.add_parser(
@@ -566,6 +566,19 @@ Semantic Search:
                 pass
         return None
 
+    def resolve_language(lang_arg: str, project_path: str | Path) -> str:
+        """Resolve 'auto'/'all' to actual language. Returns first language for single-lang commands."""
+        project_path = Path(project_path).resolve()
+        if lang_arg == "auto":
+            cached = get_cached_languages(project_path)
+            return cached[0] if cached else "python"
+        elif lang_arg == "all":
+            from .semantic import _detect_project_languages
+            respect_ignore = not getattr(args, 'no_ignore', False)
+            langs = _detect_project_languages(project_path, respect_ignore=respect_ignore)
+            return langs[0] if langs else "python"
+        return lang_arg
+
     try:
         if args.command == "tree":
             ext = set(args.ext) if args.ext else None
@@ -704,7 +717,8 @@ Semantic Search:
 
         elif args.command == "calls":
             # Check for cached graph and dirty files for incremental update
-            graph = _get_or_build_graph(args.path, args.lang, build_project_call_graph)
+            lang = resolve_language(args.lang, args.path)
+            graph = _get_or_build_graph(args.path, lang, build_project_call_graph)
             result = {
                 "edges": [
                     {
@@ -722,25 +736,28 @@ Semantic Search:
         elif args.command == "impact":
             # Support both positional path and --project flag
             project_root = args.path if args.path else args.project_path
+            lang = resolve_language(args.lang, project_root)
             result = analyze_impact(
                 project_root,
                 args.func,
                 max_depth=args.depth,
                 target_file=args.file,
-                language=args.lang,
+                language=lang,
             )
             print(json.dumps(result, indent=2))
 
         elif args.command == "dead":
+            lang = resolve_language(args.lang, args.path)
             result = analyze_dead_code(
                 args.path,
                 entry_points=args.entry if args.entry else None,
-                language=args.lang,
+                language=lang,
             )
             print(json.dumps(result, indent=2))
 
         elif args.command == "arch":
-            result = analyze_architecture(args.path, language=args.lang)
+            lang = resolve_language(args.lang, args.path)
+            result = analyze_architecture(args.path, language=lang)
             print(json.dumps(result, indent=2))
 
         elif args.command == "imports":
