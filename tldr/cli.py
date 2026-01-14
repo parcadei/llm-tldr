@@ -570,8 +570,15 @@ Semantic Search:
         """Resolve 'auto'/'all' to actual language. Returns first language for single-lang commands."""
         project_path = Path(project_path).resolve()
         if lang_arg == "auto":
+            # Try cache first, then detect if no cache
             cached = get_cached_languages(project_path)
-            return cached[0] if cached else "python"
+            if cached:
+                return cached[0]
+            # No cache - detect languages
+            from .semantic import _detect_project_languages
+            respect_ignore = not getattr(args, 'no_ignore', False)
+            langs = _detect_project_languages(project_path, respect_ignore=respect_ignore)
+            return langs[0] if langs else "python"
         elif lang_arg == "all":
             from .semantic import _detect_project_languages
             respect_ignore = not getattr(args, 'no_ignore', False)
@@ -595,9 +602,16 @@ Semantic Search:
 
             # Determine language(s) to analyze
             if args.lang == "auto":
-                # Use cached languages from tldr warm, or fall back to python
+                # Use cached languages, or detect if no cache
                 cached = get_cached_languages(project_path)
-                languages = cached if cached else ["python"]
+                if cached:
+                    languages = cached
+                else:
+                    from .semantic import _detect_project_languages
+                    respect_ignore = not getattr(args, 'no_ignore', False)
+                    languages = _detect_project_languages(project_path, respect_ignore=respect_ignore)
+                    if not languages:
+                        languages = ["python"]
             elif args.lang == "all":
                 # Detect all languages in project
                 from .semantic import _detect_project_languages
