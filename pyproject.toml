@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "llm-tldr"
-version = "1.5.0"
+version = "1.5.1"
 description = "Token-efficient code analysis for LLMs. 5-layer stack: AST, Call Graph, CFG, DFG, PDG. 95% token savings. 17 languages."
 readme = "README.md"
 requires-python = ">=3.10"
