@@ -197,24 +197,30 @@ tldr warm /path/to/project
 
 Tree-sitter parsers under the hood mean **one interface, 16 languages:**
 
-| Language | AST | Call Graph | CFG | DFG | PDG | Semantic |
-|----------|-----|------------|-----|-----|-----|----------|
-| Python | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| TypeScript | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| JavaScript | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Go | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Rust | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Java | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| C | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| C++ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Ruby | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| PHP | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| C# | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Kotlin | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Scala | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Swift | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Lua | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Elixir | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Language | AST | Call Graph | CFG | DFG | PDG | Semantic* |
+|----------|-----|------------|-----|-----|-----|-----------|
+| Python | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ Full |
+| TypeScript | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ Full |
+| JavaScript | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ Full |
+| Go | ✅ | ✅ | ✅ | ✅ | ✅ | ⚠️ Basic |
+| Rust | ✅ | ✅ | ✅ | ✅ | ✅ | ⚠️ Basic |
+| Java | ✅ | ✅ | ✅ | ✅ | ✅ | ⚠️ Basic |
+| C | ✅ | ✅ | ✅ | ✅ | ✅ | ⚠️ Basic |
+| C++ | ✅ | ✅ | ✅ | ✅ | ✅ | ⚠️ Basic |
+| Ruby | ✅ | ✅ | ✅ | ✅ | ✅ | ⚠️ Basic |
+| PHP | ✅ | ✅ | ✅ | ✅ | ✅ | ⚠️ Basic |
+| C# | ✅ | ✅ | ✅ | ✅ | ✅ | ⚠️ Basic |
+| Kotlin | ✅ | ✅ | ✅ | ✅ | ✅ | ⚠️ Basic |
+| Scala | ✅ | ✅ | ✅ | ✅ | ✅ | ⚠️ Basic |
+| Swift | ✅ | ✅ | ✅ | ✅ | ✅ | ⚠️ Basic |
+| Lua | ✅ | ✅ | ✅ | ✅ | ✅ | ⚠️ Basic |
+| Elixir | ✅ | ✅ | ✅ | ✅ | ✅ | ⚠️ Basic |
+
+**\*Semantic embeddings:**
+- **Full**: Embeddings include all 5 layers (signature, call graph, CFG complexity, DFG variables, dependencies)
+- **Basic**: Embeddings include signature, call graph, and dependencies, but not CFG/DFG summaries
+
+> **Note:** CLI commands (`tldr cfg`, `tldr dfg`, `tldr slice`) work for all languages. The "Basic" semantic limitation only affects the richness of embeddings used by `tldr semantic search`.
 
 ```bash
 # Same commands, different languages
