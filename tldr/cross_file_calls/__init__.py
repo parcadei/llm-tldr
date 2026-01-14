@@ -5,6 +5,11 @@ This package provides backward compatibility while the codebase transitions
 from the monolithic cross_file_calls.py to the package structure.
 
 For now, we re-export everything from the original module.
+
+Note:
+    Internal functions starting with `_` (e.g., `_extract_file_calls`) are 
+    deprecated and exposed only for backward compatibility. They will be 
+    removed in a future version. Please use the public API functions instead.
 """
 
 from tldr.cross_file_calls_legacy import *

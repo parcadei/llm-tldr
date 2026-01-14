@@ -28,18 +28,25 @@ class PhpParser(BaseParser):
                 (r'include_once\s+[\'"]([^\'"]+)[\'"]', 'include_once'),
                 (r'require\s+[\'"]([^\'"]+)[\'"]', 'require'),
                 (r'require_once\s+[\'"]([^\'"]+)[\'"]', 'require_once'),
-                (r'use\s+([^;]+);', 'use'),
+                # Basic use statement - handles "use Foo\Bar" and "use Foo\Bar as Alias"
+                (r'use\s+([A-Za-z_\\]\w*(?:\\[A-Za-z_]\w*)*)(?:\s+as\s+([A-Za-z_]\w*))?;', 'use'),
             ]
             
             for line_num, line in enumerate(content.split('\n'), 1):
                 for pattern, import_type in patterns:
                     match = re.search(pattern, line)
                     if match:
+                        module = match.group(1).strip()
+                        asname = None
+                        
+                        if import_type == 'use' and match.lastindex and match.lastindex >= 2:
+                             asname = match.group(2)
+
                         imports.append({
                             'type': import_type,
-                            'module': match.group(1).strip(),
-                            'name': match.group(1).strip(),
-                            'asname': None,
+                            'module': module,
+                            'name': module,
+                            'asname': asname,
                             'line': line_num,
                             'column': line.find(match.group(0))
                         })
