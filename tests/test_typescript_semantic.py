@@ -9,7 +9,6 @@ Run with:
 """
 
 import pytest
-import tempfile
 import json
 from pathlib import Path
 
@@ -36,12 +35,11 @@ export function processData(input: string): string {
 
 
 @pytest.fixture
-def temp_ts_project():
+def temp_ts_project(tmp_path):
     """Create a temporary TypeScript project."""
-    tmpdir = tempfile.mkdtemp()
-    filepath = Path(tmpdir) / "functions.ts"
+    filepath = tmp_path / "functions.ts"
     filepath.write_text(TYPESCRIPT_WITH_BRANCHES)
-    return tmpdir
+    return str(tmp_path)
 
 
 class TestSemanticCFGSummary:
@@ -61,7 +59,8 @@ class TestSemanticCFGSummary:
         # classify has 2 if branches, so complexity should be >= 3
         # Parse the complexity value
         parts = summary.split(",")
-        complexity_part = [p for p in parts if "complexity:" in p][0]
+        complexity_part = next((p for p in parts if "complexity:" in p), None)
+        assert complexity_part is not None, f"No complexity in summary: {summary}"
         complexity = int(complexity_part.split(":")[1].strip())
         assert complexity >= 3, f"classify() should have complexity >= 3, got {complexity}"
 
@@ -72,7 +71,7 @@ class TestSemanticCFGSummary:
         file_path = Path(temp_ts_project) / "functions.ts"
         summary = _get_cfg_summary(file_path, "processData", "typescript")
 
-        assert summary != "", f"CFG summary should not be empty"
+        assert summary != "", "CFG summary should not be empty"
         assert "complexity:" in summary
 
     def test_cfg_summary_javascript(self, temp_ts_project):
@@ -90,7 +89,7 @@ function greet(name) {
 }
 """)
         summary = _get_cfg_summary(js_file, "greet", "javascript")
-        assert summary != "", f"CFG summary should work for JavaScript"
+        assert summary != "", "CFG summary should work for JavaScript"
         assert "complexity:" in summary
 
 
@@ -110,7 +109,8 @@ class TestSemanticDFGSummary:
 
         # processData has variables: input, trimmed, upper, result
         parts = summary.split(",")
-        vars_part = [p for p in parts if "vars:" in p][0]
+        vars_part = next((p for p in parts if "vars:" in p), None)
+        assert vars_part is not None, f"No vars in summary: {summary}"
         var_count = int(vars_part.split(":")[1].strip())
         assert var_count >= 3, f"processData() should have >= 3 vars, got {var_count}"
 
@@ -127,7 +127,7 @@ function transform(data) {
 }
 """)
         summary = _get_dfg_summary(js_file, "transform", "javascript")
-        assert summary != "", f"DFG summary should work for JavaScript"
+        assert summary != "", "DFG summary should work for JavaScript"
         assert "vars:" in summary
 
 
@@ -161,54 +161,50 @@ class TestSemanticIndexIntegration:
                 process_unit = unit
 
         # Check classify has CFG summary (it has branches)
-        if classify_unit:
-            cfg = classify_unit.get("cfg_summary", "")
-            assert cfg != "", f"classify should have cfg_summary, got: {classify_unit}"
-            assert "complexity:" in cfg, f"cfg_summary should include complexity"
+        assert classify_unit is not None, "classify function should be indexed"
+        cfg = classify_unit.get("cfg_summary", "")
+        assert cfg != "", f"classify should have cfg_summary, got: {classify_unit}"
+        assert "complexity:" in cfg, "cfg_summary should include complexity"
 
         # Check processData has DFG summary (it has data flow)
-        if process_unit:
-            dfg = process_unit.get("dfg_summary", "")
-            assert dfg != "", f"processData should have dfg_summary, got: {process_unit}"
-            assert "vars:" in dfg, f"dfg_summary should include vars"
+        assert process_unit is not None, "processData function should be indexed"
+        dfg = process_unit.get("dfg_summary", "")
+        assert dfg != "", f"processData should have dfg_summary, got: {process_unit}"
+        assert "vars:" in dfg, "dfg_summary should include vars"
 
 
 class TestSemanticLayerParity:
     """Test that TypeScript has parity with Python for semantic features."""
 
-    def test_python_cfg_summary_works(self):
+    def test_python_cfg_summary_works(self, tmp_path):
         """Sanity check: Python CFG summary should work."""
         from tldr.semantic import _get_cfg_summary
-        import tempfile
 
-        with tempfile.NamedTemporaryFile(suffix=".py", mode="w", delete=False) as f:
-            f.write("""
+        py_file = tmp_path / "test.py"
+        py_file.write_text("""
 def example(x):
     if x > 10:
         return "big"
     return "small"
 """)
-            f.flush()
-            summary = _get_cfg_summary(Path(f.name), "example", "python")
+        summary = _get_cfg_summary(py_file, "example", "python")
 
         assert summary != "", "Python CFG summary should work"
         assert "complexity:" in summary
 
-    def test_typescript_matches_python_format(self, temp_ts_project):
+    def test_typescript_matches_python_format(self, temp_ts_project, tmp_path):
         """TypeScript CFG/DFG summaries should use same format as Python."""
-        from tldr.semantic import _get_cfg_summary, _get_dfg_summary
-        import tempfile
+        from tldr.semantic import _get_cfg_summary
 
         # Get Python format
-        with tempfile.NamedTemporaryFile(suffix=".py", mode="w", delete=False) as f:
-            f.write("""
+        py_file = tmp_path / "test.py"
+        py_file.write_text("""
 def example(x):
     if x > 10:
         return "big"
     return "small"
 """)
-            f.flush()
-            py_cfg = _get_cfg_summary(Path(f.name), "example", "python")
+        py_cfg = _get_cfg_summary(py_file, "example", "python")
 
         # Get TypeScript format
         ts_file = Path(temp_ts_project) / "functions.ts"

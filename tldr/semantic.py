@@ -758,7 +758,7 @@ def _process_file_for_extraction(
             try:
                 from tldr.dfg_extractor import extract_typescript_dfg
                 dfg = extract_typescript_dfg(content, func_name)
-                var_names = set(ref.name for ref in dfg.var_refs)
+                var_names = {ref.name for ref in dfg.var_refs}
                 dfg_cache[func_name] = f"vars:{len(var_names)}, def-use chains:{len(dfg.dataflow_edges)}"
             except Exception:
                 dfg_cache[func_name] = ""
