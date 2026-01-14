@@ -13,7 +13,6 @@ Output is unified across all extractors.
 import json
 import logging
 import os
-from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -493,8 +492,8 @@ class HybridExtractor:
                 ))
                 prev_comment = None
 
-            # Functions
-            elif node_type in ("function_declaration", "arrow_function", "method_definition"):
+            # Functions (including CommonJS function_expression: exports.foo = function() {})
+            elif node_type in ("function_declaration", "arrow_function", "method_definition", "function_expression"):
                 func = self._extract_ts_function(child, source)
                 if func:
                     if prev_comment:
@@ -504,9 +503,11 @@ class HybridExtractor:
                     if defined_names:
                         self._extract_ts_calls(child, func.name, source, module_info.call_graph, defined_names)
                 else:
-                    # Anonymous arrow function - try to get name from parent pair context
-                    # Use the arrow_function node (child) to find its pair ancestor
+                    # Anonymous function - try to get name from parent context
+                    # First try pair (object literal), then assignment (CommonJS exports)
                     parent_name = self._get_pair_property_name(child, source)
+                    if not parent_name:
+                        parent_name = self._get_assignment_name(child, source)
                     if parent_name:
                         # Create function info with parent property name
                         text = self._safe_decode(source[child.start_byte:child.end_byte])
@@ -525,6 +526,9 @@ class HybridExtractor:
                             is_async=is_async,
                             line_number=child.start_point[0] + 1,
                         ))
+                        # Extract calls for inferred-name functions (CommonJS exports, object literals)
+                        if defined_names:
+                            self._extract_ts_calls(child, parent_name, source, module_info.call_graph, defined_names)
                 prev_comment = None
 
             # Classes
@@ -539,9 +543,13 @@ class HybridExtractor:
             # export const router = { method: procedure.handler(() => {...}) }
             # Full path: object → pair → call_expression → arguments → arrow_function
             # This enables extraction of arrow functions inside object literals (e.g., oRPC routers)
+            # CommonJS: exports.foo = function() {} requires traversing expression_statement → assignment_expression
+            # Control flow: if_statement, try_statement, catch_clause for conditionally exported functions
             elif node_type in ("export_statement", "lexical_declaration", "program",
                             "variable_declaration", "variable_declarator", "statement_block",
-                            "export_clause", "object", "pair", "call_expression", "arguments"):
+                            "export_clause", "object", "pair", "call_expression", "arguments",
+                            "expression_statement", "assignment_expression", "if_statement",
+                            "try_statement", "catch_clause", "for_statement", "while_statement"):
                 self._extract_ts_nodes(child, source, module_info, defined_names)
                 prev_comment = None
             else:
@@ -568,6 +576,32 @@ class HybridExtractor:
                 for child in current.children:
                     if child.type == "property_identifier":
                         return self._safe_decode(source[child.start_byte:child.end_byte])
+            current = current.parent
+        return None
+
+    def _get_assignment_name(self, node, source: bytes) -> str | None:
+        """Get property name from CommonJS assignment (exports.foo = function() {}).
+
+        Traverses up the tree to find assignment_expression and extracts the
+        property name from the left-hand member_expression.
+        Handles: exports.foo, module.exports.foo
+        Skips: computed properties like exports[x], plain assignments like a = fn
+        """
+        current = node
+        while current is not None:
+            if current.type == "assignment_expression":
+                # Find the left side of the assignment
+                for child in current.children:
+                    if child.type == "member_expression":
+                        # Get the property name (rightmost identifier)
+                        for c in child.children:
+                            if c.type == "property_identifier":
+                                name = self._safe_decode(source[c.start_byte:c.end_byte])
+                                # Skip if property is just "exports" (module.exports = fn)
+                                if name != "exports":
+                                    return name
+                        break  # Only check first member_expression (left side)
+                break  # Only check first assignment_expression
             current = current.parent
         return None
 
@@ -3135,7 +3169,7 @@ class HybridExtractor:
         try:
             params_str = sig.split("(", 1)[1].rsplit(")", 1)[0]
             return [p.strip() for p in params_str.split(",") if p.strip()]
-        except:
+        except (IndexError, ValueError):
             return []
 
     def _detect_language(self, file_path: Path) -> str:
