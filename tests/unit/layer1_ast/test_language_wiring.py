@@ -168,7 +168,9 @@ class TestCFGExtractors:
     def test_cfg_extractor_in_api_map(self, language):
         """CFG extractor should be in api.py cfg_extractors map."""
         # Read api.py and check the cfg_extractors dict
-        api_path = Path(__file__).parent.parent / "tldr" / "api.py"
+        # Adjusted path to account for file location: tests/unit/layer1_ast/test_language_wiring.py
+        # root is 3 parents up (layer1_ast -> unit -> tests -> root)
+        api_path = Path(__file__).parents[3] / "tldr" / "api.py"
         content = api_path.read_text()
 
         # Look for the language in cfg_extractors
