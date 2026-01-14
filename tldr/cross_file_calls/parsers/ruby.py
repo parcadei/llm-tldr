@@ -30,7 +30,17 @@ class RubyParser(BaseParser):
             ]
             
             for line_num, line in enumerate(content.split('\n'), 1):
+                # Skip comment-only lines
+                if line.strip().startswith('#'):
+                    continue
+                
                 for pattern, import_type in patterns:
+                    # For 'include' pattern, skip if it's inside a string
+                    if import_type == 'include':
+                        # Check if 'include' is inside quotes
+                        if re.search(r'(["\']).*include\s+\w+.*\1', line):
+                            continue
+                    
                     match = re.search(pattern, line)
                     if match:
                         imports.append({
@@ -56,16 +66,32 @@ class RubyParser(BaseParser):
             calls = []
             
             for line_num, line in enumerate(content.split('\n'), 1):
-                for match in re.finditer(r'(\b[a-z_]\w*[!?]?)\s*\(', line):
+                # Matches: method(args), Receiver.method(args), Module::Class.method(args)
+                for match in re.finditer(r'(\b(?:[A-Za-z_]\w*(?:\.|::))*[A-Za-z_]\w*[!?]?)\s*\(', line):
+                    full_expr = match.group(1)
+                    
+                    # Split into object/module and function name
+                    if '.' in full_expr:
+                        parts = full_expr.rsplit('.', 1)
+                        obj = parts[0]
+                        func = parts[1]
+                    elif '::' in full_expr:
+                        parts = full_expr.rsplit('::', 1)
+                        obj = parts[0]
+                        func = parts[1]
+                    else:
+                        obj = None
+                        func = full_expr
+                        
                     calls.append({
                         'file': file_path,
                         'line': line_num,
                         'column': match.start(),
                         'type': 'method_call',
-                        'function': match.group(1),
-                        'object': None,
-                        'module': None,
-                        'full_expression': match.group(1),
+                        'function': func,
+                        'object': obj,
+                        'module': obj,
+                        'full_expression': full_expr,
                         'args': []
                     })
             

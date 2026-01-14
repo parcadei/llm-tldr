@@ -2,7 +2,6 @@
 Rust parser for cross-file call analysis.
 """
 
-import os
 import re
 from typing import Dict, List, Optional
 
@@ -163,15 +162,17 @@ class RustParser(BaseParser):
         try:
             arguments_node = node.child_by_field_name('arguments')
             if arguments_node:
-                for i, child in enumerate(arguments_node.children):
-                    if child.type == ',':
-                        continue
-                    args.append({
-                        'position': i,
-                        'type': 'positional',
-                        'value': None,
-                        'name': None
-                    })
+                # Filter out comma nodes and count position correctly
+                position = 0
+                for child in arguments_node.children:
+                    if child.type != ',':
+                        args.append({
+                            'position': position,
+                            'type': 'positional',
+                            'value': None,
+                            'name': None
+                        })
+                        position += 1
         except Exception:
             pass
         
@@ -196,7 +197,7 @@ class RustParser(BaseParser):
             ]
             
             for line_num, line in enumerate(content.split('\n'), 1):
-                for pattern, call_type in patterns:
+                for pattern, _call_type in patterns:
                     for match in re.finditer(pattern, line):
                         call_info = {
                             'file': file_path,

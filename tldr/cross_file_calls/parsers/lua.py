@@ -1,5 +1,5 @@
 """
-Lua parser for cross-file call analysis.
+Lua base parser and Lua parser for cross-file call analysis.
 """
 
 import re
@@ -8,7 +8,38 @@ from typing import Dict, List, Optional
 from tldr.cross_file_calls.parsers.base import BaseParser
 
 
-class LuaParser(BaseParser):
+class LuaBaseParser(BaseParser):
+    """Base parser with shared logic for Lua and Luau files."""
+    
+    def _extract_calls_regex(self, file_path: str) -> List[Dict]:
+        """Shared regex-based call extraction for Lua/Luau."""
+        try:
+            with open(file_path, 'r', encoding='utf-8') as f:
+                content = f.read()
+            
+            calls = []
+            
+            for line_num, line in enumerate(content.split('\n'), 1):
+                for match in re.finditer(r'(\b[a-zA-Z_]\w*(?:\.\w+)*)\s*\(', line):
+                    calls.append({
+                        'file': file_path,
+                        'line': line_num,
+                        'column': match.start(),
+                        'type': 'function_call',
+                        'function': match.group(1).split('.')[-1],
+                        'object': match.group(1).split('.')[0] if '.' in match.group(1) else None,
+                        'module': match.group(1).split('.')[0] if '.' in match.group(1) else None,
+                        'full_expression': match.group(1),
+                        'args': []
+                    })
+            
+            return calls
+            
+        except Exception:
+            return []
+
+
+class LuaParser(LuaBaseParser):
     """Parser for Lua files."""
     
     def extract_calls(self, file_path: str, timeout: Optional[float] = None) -> List[Dict]:
@@ -36,33 +67,6 @@ class LuaParser(BaseParser):
                     })
             
             return imports
-            
-        except Exception:
-            return []
-    
-    def _extract_calls_regex(self, file_path: str) -> List[Dict]:
-        """Regex-based call extraction for Lua."""
-        try:
-            with open(file_path, 'r', encoding='utf-8') as f:
-                content = f.read()
-            
-            calls = []
-            
-            for line_num, line in enumerate(content.split('\n'), 1):
-                for match in re.finditer(r'(\b[a-zA-Z_]\w*(?:\.\w+)*)\s*\(', line):
-                    calls.append({
-                        'file': file_path,
-                        'line': line_num,
-                        'column': match.start(),
-                        'type': 'function_call',
-                        'function': match.group(1).split('.')[-1],
-                        'object': match.group(1).split('.')[0] if '.' in match.group(1) else None,
-                        'module': match.group(1).split('.')[0] if '.' in match.group(1) else None,
-                        'full_expression': match.group(1),
-                        'args': []
-                    })
-            
-            return calls
             
         except Exception:
             return []

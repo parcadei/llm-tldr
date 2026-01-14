@@ -26,15 +26,23 @@ class KotlinParser(BaseParser):
             for line_num, line in enumerate(content.split('\n'), 1):
                 match = re.search(r'import\s+([^;]+)', line)
                 if match:
+                    # Extract path and strip inline comments
                     path = match.group(1).strip()
-                    imports.append({
-                        'type': 'import',
-                        'module': path,
-                        'name': path.split('.')[-1],
-                        'asname': None,
-                        'line': line_num,
-                        'column': line.find(match.group(0))
-                    })
+                    # Remove inline comments (// style)
+                    if '//' in path:
+                        path = path.split('//')[0].strip()
+                    # Remove any trailing whitespace
+                    path = path.strip()
+                    
+                    if path:  # Only add if path is not empty
+                        imports.append({
+                            'type': 'import',
+                            'module': path,
+                            'name': path.split('.')[-1],
+                            'asname': None,
+                            'line': line_num,
+                            'column': line.find(match.group(0))
+                        })
             
             return imports
             

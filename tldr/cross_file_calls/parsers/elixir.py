@@ -1,5 +1,5 @@
 """
-C++ parser for cross-file call analysis.
+Elixir parser for cross-file call analysis.
 """
 
 import re
@@ -8,46 +8,37 @@ from typing import Dict, List, Optional
 from tldr.cross_file_calls.parsers.base import BaseParser
 
 
-# C++ keywords that should not be treated as function calls
-CPP_KEYWORDS = {
-    'if', 'for', 'while', 'switch', 'return', 'else', 'sizeof', 'decltype',
-    'alignof', 'typeid', 'throw', 'catch', 'try', 'new', 'delete', 'do',
-    'static_cast', 'dynamic_cast', 'const_cast', 'reinterpret_cast',
-    'noexcept', 'static_assert', 'alignas', 'asm', 'namespace', 'using',
-    'typedef', 'template', 'typename', 'class', 'struct', 'enum', 'union',
-    'concept', 'requires', 'co_await', 'co_return', 'co_yield'
-}
-
-
-class CppParser(BaseParser):
-    """Parser for C++ files."""
+class ElixirParser(BaseParser):
+    """Parser for Elixir files."""
     
     def extract_calls(self, file_path: str, timeout: Optional[float] = None) -> List[Dict]:
-        """Extract function calls from a C++ file."""
+        """Extract function calls from an Elixir file."""
         return self._extract_calls_regex(file_path)
     
     def parse_imports(self, file_path: str) -> List[Dict]:
-        """Parse include statements from a C++ file."""
+        """Parse import/use statements from an Elixir file."""
         try:
             with open(file_path, 'r', encoding='utf-8') as f:
                 content = f.read()
             
             imports = []
             
-            # C++ include patterns
             patterns = [
-                (r'#include\s+<([^>]+)>', 'system'),
-                (r'#include\s+"([^"]+)"', 'local'),
+                (r'import\s+([A-Z][\w\.]*)', 'import'),
+                (r'alias\s+([A-Z][\w\.]*)', 'alias'),
+                (r'use\s+([A-Z][\w\.]*)', 'use'),
+                (r'require\s+([A-Z][\w\.]*)', 'require'),
             ]
             
             for line_num, line in enumerate(content.split('\n'), 1):
                 for pattern, import_type in patterns:
                     match = re.search(pattern, line)
                     if match:
+                        module = match.group(1)
                         imports.append({
                             'type': import_type,
-                            'module': match.group(1),
-                            'name': match.group(1),
+                            'module': module,
+                            'name': module.split('.')[-1],
                             'asname': None,
                             'line': line_num,
                             'column': line.find(match.group(0))
@@ -59,37 +50,36 @@ class CppParser(BaseParser):
             return []
     
     def _extract_calls_regex(self, file_path: str) -> List[Dict]:
-        """Regex-based call extraction for C++."""
+        """Regex-based call extraction for Elixir."""
         try:
             with open(file_path, 'r', encoding='utf-8') as f:
                 content = f.read()
             
             calls = []
             
-            # C++ function call patterns (including method calls)
+            # Elixir function call patterns
             patterns = [
-                r'(\b[a-zA-Z_]\w*)\s*\(',
-                r'(\b[a-zA-Z_]\w*::[a-zA-Z_]\w*)\s*\(',
+                # Module.function()
+                r'([A-Z][\w\.]*\.[a-z_]\w*)\s*\(',
+                # function()
+                r'(?<![A-Z])(\b[a-z_]\w*)\s*\(',
             ]
             
             for line_num, line in enumerate(content.split('\n'), 1):
                 for pattern in patterns:
                     for match in re.finditer(pattern, line):
-                        func_name = match.group(1).split('::')[-1]
-                        
-                        # Skip C++ keywords
-                        if func_name in CPP_KEYWORDS:
-                            continue
+                        full_expr = match.group(1)
+                        parts = full_expr.split('.')
                         
                         calls.append({
                             'file': file_path,
                             'line': line_num,
                             'column': match.start(),
                             'type': 'function_call',
-                            'function': func_name,
-                            'object': match.group(1).split('::')[0] if '::' in match.group(1) else None,
-                            'module': match.group(1).split('::')[0] if '::' in match.group(1) else None,
-                            'full_expression': match.group(1),
+                            'function': parts[-1],
+                            'object': parts[0] if len(parts) > 1 else None,
+                            'module': '.'.join(parts[:-1]) if len(parts) > 1 else None,
+                            'full_expression': full_expr,
                             'args': []
                         })
             
@@ -100,7 +90,7 @@ class CppParser(BaseParser):
 
 
 # Backward compatibility
-def _extract_cpp_file_calls(file_path: str) -> List[Dict]:
-    """Extract C++ file calls (backward compatibility)."""
-    parser = CppParser()
+def _extract_elixir_file_calls(file_path: str) -> List[Dict]:
+    """Extract Elixir file calls (backward compatibility)."""
+    parser = ElixirParser()
     return parser.extract_calls(file_path)

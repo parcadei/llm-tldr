@@ -2,13 +2,17 @@
 Project scanning functionality for cross-file call analysis.
 """
 
+import logging
 import os
 import time
+import warnings
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
 
 from tldr.cross_file_calls.core import ProjectCallGraph
 from tldr.parse_helpers import find_files_by_extension
+
+logger = logging.getLogger(__name__)
 
 
 def scan_project(
@@ -42,8 +46,8 @@ def scan_project(
         max_file_size: Maximum file size to process (bytes)
         follow_symlinks: Whether to follow symbolic links
         respect_gitignore: Whether to respect .gitignore files
-        incremental: Enable incremental scanning
-        cache_dir: Directory for cache files
+        incremental: Enable incremental scanning (not yet implemented)
+        cache_dir: Directory for cache files (not yet implemented)
         file_timeout: Timeout per file (seconds)
         parallel: Enable parallel processing
         max_workers: Maximum number of worker threads
@@ -51,6 +55,13 @@ def scan_project(
     Returns:
         ProjectCallGraph containing all discovered calls and relationships
     """
+    # Warn about unimplemented parameters
+    if incremental or cache_dir:
+        warnings.warn(
+            "incremental and cache_dir parameters are not yet implemented",
+            stacklevel=2
+        )
+    
     start_time = time.time()
     
     if verbose:
@@ -59,11 +70,7 @@ def scan_project(
             print(f"Languages: {', '.join(languages)}")
     
     # Initialize project call graph
-    call_graph = ProjectCallGraph(
-        root_dir=root_dir,
-        languages=languages or [],
-        timestamp=time.time()
-    )
+    call_graph = ProjectCallGraph()
     
     # Find all relevant files
     files_to_scan = _find_files_to_scan(
@@ -87,8 +94,6 @@ def scan_project(
         files_to_scan=files_to_scan,
         call_graph=call_graph,
         verbose=verbose,
-        incremental=incremental,
-        cache_dir=cache_dir,
         file_timeout=file_timeout,
         parallel=parallel,
         max_workers=max_workers
@@ -149,7 +154,8 @@ def _find_files_to_scan(
         'kotlin': ['.kt', '.kts'],
         'scala': ['.scala', '.sc'],
         'lua': ['.lua'],
-        'luau': ['.luau']
+        'luau': ['.luau'],
+        'elixir': ['.ex', '.exs']
     }
     
     # Determine which extensions to look for
@@ -183,8 +189,6 @@ def _process_files(
     files_to_scan: List[str],
     call_graph: ProjectCallGraph,
     verbose: bool,
-    incremental: bool,
-    cache_dir: Optional[str],
     file_timeout: Optional[float],
     parallel: bool,
     max_workers: Optional[int]
@@ -195,13 +199,11 @@ def _process_files(
     
     if parallel and len(files_to_scan) > 1:
         _process_files_parallel(
-            files_to_scan, call_graph, verbose, incremental,
-            cache_dir, file_timeout, max_workers
+            files_to_scan, call_graph, verbose, file_timeout, max_workers
         )
     else:
         _process_files_sequential(
-            files_to_scan, call_graph, verbose, incremental,
-            cache_dir, file_timeout
+            files_to_scan, call_graph, verbose, file_timeout
         )
 
 
@@ -209,8 +211,6 @@ def _process_files_sequential(
     files_to_scan: List[str],
     call_graph: ProjectCallGraph,
     verbose: bool,
-    incremental: bool,
-    cache_dir: Optional[str],
     file_timeout: Optional[float]
 ) -> None:
     """Process files sequentially."""
@@ -243,8 +243,6 @@ def _process_files_parallel(
     files_to_scan: List[str],
     call_graph: ProjectCallGraph,
     verbose: bool,
-    incremental: bool,
-    cache_dir: Optional[str],
     file_timeout: Optional[float],
     max_workers: Optional[int]
 ) -> None:
@@ -253,40 +251,56 @@ def _process_files_parallel(
     import concurrent.futures
     from tldr.cross_file_calls.parsers import get_parser_for_file
     
-    def process_file(file_path: str) -> Tuple[str, List]:
+    # Capture verbose and file_timeout for thread-safe access
+    _verbose = verbose
+    _file_timeout = file_timeout
+    
+    # Thread-safe error collection
+    errors: List[str] = []
+    
+    def process_file(file_path: str, timeout: Optional[float], log_verbose: bool) -> Tuple[str, List]:
         """Process a single file and return results."""
         try:
             parser = get_parser_for_file(file_path)
             if not parser:
                 return file_path, []
             
-            file_calls = parser.extract_calls(file_path, timeout=file_timeout)
+            file_calls = parser.extract_calls(file_path, timeout=timeout)
             return file_path, file_calls
             
         except Exception as e:
-            if verbose:
-                print(f"Error processing {file_path}: {e}")
+            if log_verbose:
+                errors.append(f"Error processing {file_path}: {e}")
             return file_path, []
     
     # Process files in parallel
     with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
         future_to_file = {
-            executor.submit(process_file, file_path): file_path
+            executor.submit(process_file, file_path, _file_timeout, _verbose): file_path
             for file_path in files_to_scan
         }
         
         for i, future in enumerate(concurrent.futures.as_completed(future_to_file)):
-            if verbose and (i + 1) % 100 == 0:
+            if _verbose and (i + 1) % 100 == 0:
                 print(f"Processed {i + 1}/{len(files_to_scan)} files")
             
             file_path, file_calls = future.result()
             if file_calls:
                 call_graph.add_file(file_path, file_calls)
+    
+    # Report errors after processing
+    if _verbose:
+        for error in errors:
+            print(error)
 
 
 def _build_call_relationships(call_graph: ProjectCallGraph) -> None:
-    """Build relationships between calls and definitions."""
+    """
+    Build relationships between calls and definitions.
     
-    # This is a placeholder - the actual implementation would be in resolver.py
-    # For now, we'll just mark the call graph as processed
-    call_graph.timestamp = time.time()
+    TODO: Full implementation is in resolver.py.
+    This is a placeholder that marks the graph as processed.
+    """
+    # The actual cross-file resolution is done in builder._resolve_cross_file_calls
+    # This function is kept for API compatibility
+    pass

@@ -2,6 +2,7 @@
 Language-specific parsers for cross-file call analysis.
 """
 
+import os
 from typing import Dict, List, Optional, Type
 
 from tldr.cross_file_calls.parsers.base import BaseParser
@@ -20,6 +21,7 @@ from tldr.cross_file_calls.parsers.kotlin import KotlinParser
 from tldr.cross_file_calls.parsers.scala import ScalaParser
 from tldr.cross_file_calls.parsers.lua import LuaParser
 from tldr.cross_file_calls.parsers.luau import LuauParser
+from tldr.cross_file_calls.parsers.elixir import ElixirParser
 
 
 PARSERS: Dict[str, Type[BaseParser]] = {
@@ -39,6 +41,7 @@ PARSERS: Dict[str, Type[BaseParser]] = {
     'scala': ScalaParser,
     'lua': LuaParser,
     'luau': LuauParser,
+    'elixir': ElixirParser,
 }
 
 
@@ -69,12 +72,12 @@ EXTENSION_MAP: Dict[str, str] = {
     '.sc': 'scala',
     '.lua': 'lua',
     '.luau': 'luau',
+    '.ex': 'elixir',
+    '.exs': 'elixir',
 }
 
 
 def get_parser_for_file(file_path: str) -> Optional[BaseParser]:
-    import os
-    
     _, ext = os.path.splitext(file_path.lower())
     
     if ext not in EXTENSION_MAP:

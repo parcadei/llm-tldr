@@ -13,3 +13,10 @@ from tldr.hybrid_extractor_legacy import (
     HybridExtractor,
     extract_directory,
 )
+
+__all__ = [
+    "FileTooLargeError",
+    "ParseError",
+    "HybridExtractor",
+    "extract_directory",
+]

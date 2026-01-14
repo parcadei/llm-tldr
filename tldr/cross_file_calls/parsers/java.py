@@ -2,8 +2,8 @@
 Java parser for cross-file call analysis.
 """
 
-import os
 import re
+import signal
 from typing import Dict, List, Optional
 
 from tldr.cross_file_calls.parsers.base import BaseParser
@@ -14,16 +14,35 @@ class JavaParser(BaseParser):
     """Parser for Java files."""
     
     def extract_calls(self, file_path: str, timeout: Optional[float] = None) -> List[Dict]:
-        """Extract function calls from a Java file."""
+        """
+        Extract function calls from a Java file.
+        
+        Note: The timeout parameter uses signal.SIGALRM (Unix only).
+        Falls back to regex-based extraction if tree-sitter is unavailable or on timeout.
+        """
         if not HAS_JAVA_PARSER:
             return self._extract_calls_regex(file_path)
         
+        # Timeout handler
+        def handler(signum, frame):
+            raise TimeoutError("Parsing timed out")
+        
         try:
-            parser = _get_java_parser()
-            with open(file_path, 'r', encoding='utf-8') as f:
-                content = f.read()
+            # Set timeout if provided and supported
+            if timeout and hasattr(signal, 'SIGALRM'):
+                signal.signal(signal.SIGALRM, handler)
+                signal.alarm(int(timeout) or 1)  # Ensure at least 1s
             
-            tree = parser.parse(bytes(content, 'utf-8'))
+            try:
+                parser = _get_java_parser()
+                with open(file_path, 'r', encoding='utf-8') as f:
+                    content = f.read()
+                
+                tree = parser.parse(bytes(content, 'utf-8'))
+            finally:
+                if timeout and hasattr(signal, 'SIGALRM'):
+                    signal.alarm(0)  # Disable alarm
+            
             calls = []
             
             def walk_node(node, depth=0):
@@ -113,11 +132,14 @@ class JavaParser(BaseParser):
         try:
             arguments_node = node.child_by_field_name('arguments')
             if arguments_node:
-                for i, child in enumerate(arguments_node.children):
-                    if child.type == ',':
-                        continue
+                # Filter out comma nodes to get correct position indices
+                non_comma_children = [
+                    child for child in arguments_node.children 
+                    if child.type != ','
+                ]
+                for position, child in enumerate(non_comma_children):
                     args.append({
-                        'position': i,
+                        'position': position,
                         'type': 'positional',
                         'value': None,
                         'name': None
@@ -146,7 +168,7 @@ class JavaParser(BaseParser):
             ]
             
             for line_num, line in enumerate(content.split('\n'), 1):
-                for pattern, call_type in patterns:
+                for pattern, _ in patterns:
                     for match in re.finditer(pattern, line):
                         call_info = {
                             'file': file_path,

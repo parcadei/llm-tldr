@@ -2,7 +2,6 @@
 Go parser for cross-file call analysis.
 """
 
-import os
 import re
 from typing import Dict, List, Optional
 
@@ -14,7 +13,13 @@ class GoParser(BaseParser):
     """Parser for Go files."""
     
     def extract_calls(self, file_path: str, timeout: Optional[float] = None) -> List[Dict]:
-        """Extract function calls from a Go file."""
+        """
+        Extract function calls from a Go file.
+        
+        Note: The timeout parameter is accepted for API consistency but is not
+        currently implemented for tree-sitter parsing. Falls back to regex-based
+        extraction if tree-sitter is unavailable.
+        """
         if not HAS_GO_PARSER:
             return self._extract_calls_regex(file_path)
         
@@ -58,8 +63,6 @@ class GoParser(BaseParser):
                 (r'import\s+[\'"]([^\'"]+)[\'"]', 'single'),
                 # import alias "module"
                 (r'import\s+(\w+)\s+[\'"]([^\'"]+)[\'"]', 'alias'),
-                # import ( ... )
-                (r'import\s*\(\s*\)', 'multi_start'),
             ]
             
             in_multi_import = False
@@ -185,11 +188,14 @@ class GoParser(BaseParser):
         try:
             arguments_node = node.child_by_field_name('arguments')
             if arguments_node:
-                for i, child in enumerate(arguments_node.children):
-                    if child.type == ',':
-                        continue
+                # Filter out comma nodes to get correct position indices
+                non_comma_children = [
+                    child for child in arguments_node.children 
+                    if child.type != ','
+                ]
+                for position, child in enumerate(non_comma_children):
                     args.append({
-                        'position': i,
+                        'position': position,
                         'type': 'positional',
                         'value': None,
                         'name': None
@@ -218,7 +224,7 @@ class GoParser(BaseParser):
             ]
             
             for line_num, line in enumerate(content.split('\n'), 1):
-                for pattern, call_type in patterns:
+                for pattern, _call_type in patterns:
                     for match in re.finditer(pattern, line):
                         call_info = {
                             'file': file_path,

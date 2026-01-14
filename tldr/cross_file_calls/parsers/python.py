@@ -3,8 +3,7 @@ Python parser for cross-file call analysis.
 """
 
 import ast
-import os
-from typing import Dict, List, Optional, Set, Tuple
+from typing import Dict, List, Optional
 
 from tldr.cross_file_calls.parsers.base import BaseParser
 
@@ -49,6 +48,7 @@ class PythonParser(BaseParser):
                             'type': 'import',
                             'module': alias.name,
                             'name': alias.asname or alias.name,
+                            'asname': alias.asname,
                             'line': node.lineno,
                             'column': node.col_offset
                         })
@@ -221,7 +221,7 @@ def _extract_definitions(file_path: str) -> List[Dict]:
                     'line': node.lineno,
                     'column': node.col_offset,
                     'args': [arg.arg for arg in node.args.args],
-                    'decorators': [ast.unparse(d) for d in node.decorators] if hasattr(ast, 'unparse') else []
+                    'decorators': [ast.unparse(d) for d in node.decorator_list] if hasattr(ast, 'unparse') else []
                 })
             
             elif isinstance(node, ast.ClassDef):
@@ -231,7 +231,7 @@ def _extract_definitions(file_path: str) -> List[Dict]:
                     'line': node.lineno,
                     'column': node.col_offset,
                     'methods': [n.name for n in node.body if isinstance(n, ast.FunctionDef)],
-                    'decorators': [ast.unparse(d) for d in node.decorators] if hasattr(ast, 'unparse') else []
+                    'decorators': [ast.unparse(d) for d in node.decorator_list] if hasattr(ast, 'unparse') else []
                 })
         
         return definitions

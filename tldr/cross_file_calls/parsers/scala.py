@@ -12,7 +12,12 @@ class ScalaParser(BaseParser):
     """Parser for Scala files."""
     
     def extract_calls(self, file_path: str, timeout: Optional[float] = None) -> List[Dict]:
-        """Extract function calls from a Scala file."""
+        """
+        Extract function calls from a Scala file.
+        
+        Note: The timeout parameter is accepted for API consistency but is not
+        currently implemented for regex-based parsing.
+        """
         return self._extract_calls_regex(file_path)
     
     def parse_imports(self, file_path: str) -> List[Dict]:
@@ -24,7 +29,54 @@ class ScalaParser(BaseParser):
             imports = []
             
             for line_num, line in enumerate(content.split('\n'), 1):
-                match = re.search(r'import\s+([^;]+)', line)
+                # Check for grouped imports: import foo.{Bar, Baz}
+                grouped_match = re.search(r'import\s+(.+)\.{([^}]+)}', line)
+                if grouped_match:
+                    base_module = grouped_match.group(1).strip()
+                    symbols = grouped_match.group(2).strip()
+                    
+                    for symbol in symbols.split(','):
+                        symbol = symbol.strip()
+                        # Handle alias: Bar => B
+                        if '=>' in symbol:
+                            parts = symbol.split('=>')
+                            name = parts[0].strip()
+                            alias = parts[1].strip()
+                            imports.append({
+                                'type': 'import_grouped',
+                                'module': base_module,
+                                'name': name,
+                                'asname': alias,
+                                'line': line_num,
+                                'column': line.find(grouped_match.group(0))
+                            })
+                        else:
+                            imports.append({
+                                'type': 'import_grouped',
+                                'module': base_module,
+                                'name': symbol,
+                                'asname': None,
+                                'line': line_num,
+                                'column': line.find(grouped_match.group(0))
+                            })
+                    continue
+                
+                # Check for wildcard imports: import foo._
+                wildcard_match = re.search(r'import\s+(.+)\._', line)
+                if wildcard_match:
+                    module = wildcard_match.group(1).strip()
+                    imports.append({
+                        'type': 'import_wildcard',
+                        'module': module,
+                        'name': '_',
+                        'asname': None,
+                        'line': line_num,
+                        'column': line.find(wildcard_match.group(0))
+                    })
+                    continue
+                
+                # Regular import
+                match = re.search(r'import\s+([^;{]+)', line)
                 if match:
                     path = match.group(1).strip()
                     imports.append({

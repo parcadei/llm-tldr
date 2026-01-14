@@ -3,7 +3,6 @@ Call graph builder for cross-file call analysis.
 """
 
 import os
-import time
 from typing import Dict, List, Optional, Set
 
 from tldr.cross_file_calls.core import ProjectCallGraph

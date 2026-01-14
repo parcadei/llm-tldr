@@ -2,9 +2,8 @@
 TypeScript/JavaScript parser for cross-file call analysis.
 """
 
-import os
 import re
-from typing import Dict, List, Optional, Set
+from typing import Dict, List, Optional
 
 from tldr.cross_file_calls.parsers.base import BaseParser
 from tldr.cross_file_calls.core import HAS_TS_PARSER, _get_ts_parser
@@ -128,7 +127,7 @@ class TypeScriptParser(BaseParser):
                 call_info.update(self._extract_function_info(function_node, content))
             
             # Extract arguments
-            call_info['args'] = self._extract_ts_arguments(node)
+            call_info['args'] = self._extract_ts_arguments(node, content)
             
             return call_info
             
@@ -137,7 +136,7 @@ class TypeScriptParser(BaseParser):
     
     def _extract_function_info(self, node, content: str) -> Dict:
         """Extract function information from a tree-sitter node."""
-        result = {
+        result: Dict[str, Optional[str]] = {
             'function': None,
             'module': None,
             'object': None,
@@ -177,19 +176,21 @@ class TypeScriptParser(BaseParser):
         
         return result
     
-    def _extract_ts_arguments(self, node) -> List[Dict]:
+    def _extract_ts_arguments(self, node, content: str) -> List[Dict]:
         """Extract arguments from a function call node."""
         args = []
         
         try:
             arguments_node = node.child_by_field_name('arguments')
             if arguments_node:
-                for i, child in enumerate(arguments_node.children):
+                # Filter out comma nodes and count position correctly
+                position = 0
+                for child in arguments_node.children:
                     if child.type == ',':
                         continue
                     
-                    arg_info = {
-                        'position': i,
+                    arg_info: Dict[str, Optional[object]] = {
+                        'position': position,
                         'type': 'positional',
                         'value': None,
                         'name': None
@@ -205,6 +206,7 @@ class TypeScriptParser(BaseParser):
                                     break
                     
                     args.append(arg_info)
+                    position += 1
         except Exception:
             pass
         
@@ -217,22 +219,27 @@ class TypeScriptParser(BaseParser):
                 content = f.read()
             
             calls = []
+            seen = set()  # Track seen calls to avoid duplicates
             
             # Regex patterns for function calls
             patterns = [
                 # function()
-                (r'(\b\w+)\s*\(', 'simple'),
+                r'(\b\w+)\s*\(',
                 # object.method()
-                (r'(\b\w+\.\w+)\s*\(', 'method'),
-                # module.function()
-                (r'(\b\w+\.\w+)\s*\(', 'module'),
+                r'(\b\w+\.\w+)\s*\(',
                 # this.method()
-                (r'(this\.\w+)\s*\(', 'this'),
+                r'(this\.\w+)\s*\(',
             ]
             
             for line_num, line in enumerate(content.split('\n'), 1):
-                for pattern, call_type in patterns:
+                for pattern in patterns:
                     for match in re.finditer(pattern, line):
+                        # Create a unique key for deduplication
+                        key = (line_num, match.start(), match.group(1))
+                        if key in seen:
+                            continue
+                        seen.add(key)
+                        
                         call_info = {
                             'file': file_path,
                             'line': line_num,
@@ -240,7 +247,7 @@ class TypeScriptParser(BaseParser):
                             'type': 'function_call',
                             'function': match.group(1).split('.')[-1] if '.' in match.group(1) else match.group(1),
                             'object': match.group(1).split('.')[0] if '.' in match.group(1) else None,
-                            'module': match.group(1).split('.')[0] if '.' in match.group(1) and call_type == 'module' else None,
+                            'module': None,
                             'full_expression': match.group(1),
                             'args': []
                         }

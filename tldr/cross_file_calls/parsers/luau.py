@@ -5,10 +5,10 @@ Luau parser for cross-file call analysis.
 import re
 from typing import Dict, List, Optional
 
-from tldr.cross_file_calls.parsers.base import BaseParser
+from tldr.cross_file_calls.parsers.lua import LuaBaseParser
 
 
-class LuauParser(BaseParser):
+class LuauParser(LuaBaseParser):
     """Parser for Luau files."""
     
     def extract_calls(self, file_path: str, timeout: Optional[float] = None) -> List[Dict]:
@@ -36,33 +36,6 @@ class LuauParser(BaseParser):
                     })
             
             return imports
-            
-        except Exception:
-            return []
-    
-    def _extract_calls_regex(self, file_path: str) -> List[Dict]:
-        """Regex-based call extraction for Luau."""
-        try:
-            with open(file_path, 'r', encoding='utf-8') as f:
-                content = f.read()
-            
-            calls = []
-            
-            for line_num, line in enumerate(content.split('\n'), 1):
-                for match in re.finditer(r'(\b[a-zA-Z_]\w*(?:\.\w+)*)\s*\(', line):
-                    calls.append({
-                        'file': file_path,
-                        'line': line_num,
-                        'column': match.start(),
-                        'type': 'function_call',
-                        'function': match.group(1).split('.')[-1],
-                        'object': match.group(1).split('.')[0] if '.' in match.group(1) else None,
-                        'module': match.group(1).split('.')[0] if '.' in match.group(1) else None,
-                        'full_expression': match.group(1),
-                        'args': []
-                    })
-            
-            return calls
             
         except Exception:
             return []

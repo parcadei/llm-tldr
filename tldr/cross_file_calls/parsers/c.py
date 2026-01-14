@@ -2,7 +2,6 @@
 C parser for cross-file call analysis.
 """
 
-import os
 import re
 from typing import Dict, List, Optional
 
@@ -105,11 +104,14 @@ class CParser(BaseParser):
         try:
             arguments_node = node.child_by_field_name('arguments')
             if arguments_node:
-                for i, child in enumerate(arguments_node.children):
-                    if child.type == ',':
-                        continue
+                # Filter out comma nodes to get correct position indices
+                non_comma_children = [
+                    child for child in arguments_node.children 
+                    if child.type != ','
+                ]
+                for position, child in enumerate(non_comma_children):
                     args.append({
-                        'position': i,
+                        'position': position,
                         'type': 'positional',
                         'value': None,
                         'name': None

@@ -24,15 +24,52 @@ class SwiftParser(BaseParser):
             imports = []
             
             for line_num, line in enumerate(content.split('\n'), 1):
-                match = re.search(r'import\s+(\w+)', line)
-                if match:
+                # Handle kind-qualified imports: import class/struct/enum/protocol/func/var/let Module.Symbol
+                kind_match = re.search(
+                    r'import\s+(class|struct|enum|protocol|func|var|let)\s+([A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*)', 
+                    line
+                )
+                if kind_match:
+                    kind = kind_match.group(1)
+                    full_path = kind_match.group(2)
+                    parts = full_path.split('.')
                     imports.append({
-                        'type': 'import',
-                        'module': match.group(1),
-                        'name': match.group(1),
+                        'type': f'import_{kind}',
+                        'module': parts[0] if parts else full_path,
+                        'name': full_path,
+                        'asname': None,
+                        'kind': kind,
+                        'line': line_num,
+                        'column': line.find(kind_match.group(0))
+                    })
+                    continue
+                
+                # Handle regular imports with submodules: import UIKit.UIView
+                submodule_match = re.search(r'import\s+([A-Za-z_]\w*(?:\.[A-Za-z_]\w*)+)', line)
+                if submodule_match:
+                    full_path = submodule_match.group(1)
+                    parts = full_path.split('.')
+                    imports.append({
+                        'type': 'import_submodule',
+                        'module': parts[0],
+                        'name': full_path,
                         'asname': None,
                         'line': line_num,
-                        'column': line.find(match.group(0))
+                        'column': line.find(submodule_match.group(0))
+                    })
+                    continue
+                
+                # Handle simple imports: import UIKit
+                simple_match = re.search(r'import\s+([A-Za-z_]\w*)', line)
+                if simple_match:
+                    module = simple_match.group(1)
+                    imports.append({
+                        'type': 'import',
+                        'module': module,
+                        'name': module,
+                        'asname': None,
+                        'line': line_num,
+                        'column': line.find(simple_match.group(0))
                     })
             
             return imports
