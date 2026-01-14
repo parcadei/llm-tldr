@@ -40,7 +40,7 @@ class SwiftParser(BaseParser):
                         'asname': None,
                         'kind': kind,
                         'line': line_num,
-                        'column': line.find(kind_match.group(0))
+                        'column': kind_match.start()
                     })
                     continue
                 
@@ -55,7 +55,7 @@ class SwiftParser(BaseParser):
                         'name': full_path,
                         'asname': None,
                         'line': line_num,
-                        'column': line.find(submodule_match.group(0))
+                        'column': submodule_match.start()
                     })
                     continue
                 
@@ -69,7 +69,7 @@ class SwiftParser(BaseParser):
                         'name': module,
                         'asname': None,
                         'line': line_num,
-                        'column': line.find(simple_match.group(0))
+                        'column': simple_match.start()
                     })
             
             return imports

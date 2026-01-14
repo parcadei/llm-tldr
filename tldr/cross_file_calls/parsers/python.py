@@ -134,7 +134,11 @@ class PythonParser(BaseParser):
             
             # Check if this might be a module import
             if len(parts) >= 2:
-                result['module'] = parts[-2]  # Second to last might be module
+                # Use the base object as module (e.g., 'a' in 'a.b.c')
+                # But keep the chain logic if needed. Original code used parts[-2].
+                # If we want the root module, it's parts[0] (before reverse) -> parts[-1] (after reverse)
+                # Let's trust the requirement: "result['module'] refers to the base object"
+                result['module'] = parts[0]
         
         # Reverse the parts to get the full expression
         parts.reverse()
@@ -196,12 +200,89 @@ def _index_python_file(file_path: str) -> Dict:
     """Index a Python file and extract all relevant information."""
     parser = PythonParser()
     
+    try:
+        with open(file_path, 'r', encoding='utf-8') as f:
+            content = f.read()
+        tree = ast.parse(content)
+    except Exception:
+        # Fallback for read/parse errors
+        return {
+            'file': file_path,
+            'imports': [],
+            'calls': [],
+            'definitions': []
+        }
+    
+    # Helper to avoid re-parsing
+    def get_imports(tree):
+        imports = []
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    imports.append({
+                        'type': 'import',
+                        'module': alias.name,
+                        'name': alias.asname or alias.name,
+                        'asname': alias.asname,
+                        'line': node.lineno,
+                        'column': node.col_offset
+                    })
+            elif isinstance(node, ast.ImportFrom):
+                module = node.module or ''
+                for alias in node.names:
+                    imports.append({
+                        'type': 'from_import',
+                        'module': module,
+                        'name': alias.name,
+                        'asname': alias.asname,
+                        'line': node.lineno,
+                        'column': node.col_offset
+                    })
+        return imports
+
+    def get_calls(tree, file_path):
+        calls = []
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Call):
+                call_info = parser._extract_call_info(node, file_path)
+                if call_info:
+                    calls.append(call_info)
+        return calls
+
     return {
         'file': file_path,
-        'imports': parser.parse_imports(file_path),
-        'calls': parser.extract_calls(file_path),
-        'definitions': _extract_definitions(file_path)
+        'imports': get_imports(tree),
+        'calls': get_calls(tree, file_path),
+        'definitions': _extract_definitions_from_ast(tree)
     }
+
+
+def _extract_definitions_from_ast(tree: ast.AST) -> List[Dict]:
+    """Extract function and class definitions from an AST."""
+    definitions = []
+    
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            definitions.append({
+                'type': 'async_function' if isinstance(node, ast.AsyncFunctionDef) else 'function',
+                'name': node.name,
+                'line': node.lineno,
+                'column': node.col_offset,
+                'args': [arg.arg for arg in node.args.args],
+                'decorators': [ast.unparse(d) for d in node.decorator_list] if hasattr(ast, 'unparse') else []
+            })
+        
+        elif isinstance(node, ast.ClassDef):
+            definitions.append({
+                'type': 'class',
+                'name': node.name,
+                'line': node.lineno,
+                'column': node.col_offset,
+                'methods': [n.name for n in node.body if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))],
+                'decorators': [ast.unparse(d) for d in node.decorator_list] if hasattr(ast, 'unparse') else []
+            })
+    
+    return definitions
 
 
 def _extract_definitions(file_path: str) -> List[Dict]:
@@ -209,32 +290,7 @@ def _extract_definitions(file_path: str) -> List[Dict]:
     try:
         with open(file_path, 'r', encoding='utf-8') as f:
             content = f.read()
-        
         tree = ast.parse(content)
-        definitions = []
-        
-        for node in ast.walk(tree):
-            if isinstance(node, ast.FunctionDef):
-                definitions.append({
-                    'type': 'function',
-                    'name': node.name,
-                    'line': node.lineno,
-                    'column': node.col_offset,
-                    'args': [arg.arg for arg in node.args.args],
-                    'decorators': [ast.unparse(d) for d in node.decorator_list] if hasattr(ast, 'unparse') else []
-                })
-            
-            elif isinstance(node, ast.ClassDef):
-                definitions.append({
-                    'type': 'class',
-                    'name': node.name,
-                    'line': node.lineno,
-                    'column': node.col_offset,
-                    'methods': [n.name for n in node.body if isinstance(n, ast.FunctionDef)],
-                    'decorators': [ast.unparse(d) for d in node.decorator_list] if hasattr(ast, 'unparse') else []
-                })
-        
-        return definitions
-        
+        return _extract_definitions_from_ast(tree)
     except Exception:
         return []

@@ -119,9 +119,9 @@ class RustParser(BaseParser):
         except Exception:
             return None
     
-    def _extract_function_info(self, node, content: str) -> Dict:
+    def _extract_function_info(self, node, content: str) -> Dict[str, Optional[str]]:
         """Extract function information from a Rust tree-sitter node."""
-        result = {
+        result: Dict[str, Optional[str]] = {
             'function': None,
             'module': None,
             'object': None,
@@ -196,18 +196,26 @@ class RustParser(BaseParser):
                 (r'(\b[a-z]\w*::[a-z]\w*)\s*\(', 'module'),
             ]
             
+            seen_calls = set()
             for line_num, line in enumerate(content.split('\n'), 1):
                 for pattern, _call_type in patterns:
                     for match in re.finditer(pattern, line):
+                        full_expr = match.group(1)
+                        # Deduplicate based on position and expression
+                        call_key = (line_num, match.start(), full_expr)
+                        if call_key in seen_calls:
+                            continue
+                        seen_calls.add(call_key)
+
                         call_info = {
                             'file': file_path,
                             'line': line_num,
                             'column': match.start(),
                             'type': 'function_call',
-                            'function': match.group(1).split('::')[-1],
-                            'object': match.group(1).split('::')[0] if '::' in match.group(1) else None,
-                            'module': match.group(1).split('::')[0] if '::' in match.group(1) else None,
-                            'full_expression': match.group(1),
+                            'function': full_expr.split('::')[-1],
+                            'object': full_expr.split('::')[0] if '::' in full_expr else None,
+                            'module': full_expr.split('::')[0] if '::' in full_expr else None,
+                            'full_expression': full_expr,
                             'args': []
                         }
                         calls.append(call_info)

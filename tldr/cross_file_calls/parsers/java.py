@@ -137,7 +137,7 @@ class JavaParser(BaseParser):
                     child for child in arguments_node.children 
                     if child.type != ','
                 ]
-                for position, child in enumerate(non_comma_children):
+                for position, _ in enumerate(non_comma_children):
                     args.append({
                         'position': position,
                         'type': 'positional',

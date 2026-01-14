@@ -42,7 +42,7 @@ class TypeScriptParser(BaseParser):
             walk_node(tree.root_node)
             return calls
             
-        except Exception as e:
+        except Exception:
             return self._extract_calls_regex(file_path)
     
     def parse_imports(self, file_path: str) -> List[Dict]:

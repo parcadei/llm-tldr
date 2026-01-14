@@ -41,6 +41,18 @@ class TestCrossFileCallsPackage:
         assert callable(parse_ts_imports)
         assert callable(parse_go_imports)
         assert callable(parse_rust_imports)
+        assert callable(parse_java_imports)
+        assert callable(parse_c_imports)
+        assert callable(parse_cpp_imports)
+        assert callable(parse_ruby_imports)
+        assert callable(parse_kotlin_imports)
+        assert callable(parse_scala_imports)
+        assert callable(parse_php_imports)
+        assert callable(parse_swift_imports)
+        assert callable(parse_csharp_imports)
+        assert callable(parse_lua_imports)
+        assert callable(parse_luau_imports)
+        assert callable(parse_elixir_imports)
 
     def test_imports_constants(self):
         from tldr.cross_file_calls import (
@@ -86,6 +98,19 @@ class TestDFGExtractorPackage:
         assert callable(extract_python_dfg)
         assert callable(extract_typescript_dfg)
         assert callable(extract_go_dfg)
+        assert callable(extract_rust_dfg)
+        assert callable(extract_java_dfg)
+        assert callable(extract_c_dfg)
+        assert callable(extract_cpp_dfg)
+        assert callable(extract_ruby_dfg)
+        assert callable(extract_php_dfg)
+        assert callable(extract_swift_dfg)
+        assert callable(extract_csharp_dfg)
+        assert callable(extract_kotlin_dfg)
+        assert callable(extract_scala_dfg)
+        assert callable(extract_lua_dfg)
+        assert callable(extract_luau_dfg)
+        assert callable(extract_elixir_dfg)
 
     def test_python_dfg_extraction(self):
         from tldr.dfg_extractor import extract_python_dfg
@@ -99,6 +124,8 @@ def example(x):
         assert result is not None
         assert hasattr(result, 'var_refs')
         assert hasattr(result, 'dataflow_edges')
+        assert len(result.var_refs) > 0
+        assert len(result.dataflow_edges) > 0
 
 
 class TestHybridExtractorPackage:

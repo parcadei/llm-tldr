@@ -73,7 +73,7 @@ class CSharpParser(BaseParser):
                 match = re.search(r'using\s+([^;=]+);', line)
                 if match:
                     # Skip if this is a using statement (resource disposal)
-                    if 'using\s*\(' in line:
+                    if re.search(r'using\s*\(', line):
                         continue
                     imports.append({
                         'type': 'using',

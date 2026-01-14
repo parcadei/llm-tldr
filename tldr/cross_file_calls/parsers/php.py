@@ -58,16 +58,36 @@ class PhpParser(BaseParser):
             calls = []
             
             for line_num, line in enumerate(content.split('\n'), 1):
-                for match in re.finditer(r'(\b[a-zA-Z_]\w*)\s*\(', line):
+                # Matches: func(), $obj->method(), Class::method(), \NS\func()
+                # Group 1: Optional qualifier ($var->, Class::, \NS\)
+                # Group 2: Function/Method name
+                for match in re.finditer(r'(?:(\$?\w+(?:->|::)|\\(?:[\w\\]+\\)?))?(\w+)\s*\(', line):
+                    qualifier = match.group(1)
+                    func_name = match.group(2)
+                    full_expr = match.group(0)[:-1] # strip '('
+                    
+                    obj = None
+                    module = None
+                    
+                    if qualifier:
+                        if '->' in qualifier:
+                            obj = qualifier[:-2] # strip ->
+                        elif '::' in qualifier:
+                            obj = qualifier[:-2] # strip ::
+                            module = obj
+                        else:
+                            # Namespace qualifier
+                            module = qualifier.rstrip('\\')
+
                     calls.append({
                         'file': file_path,
                         'line': line_num,
                         'column': match.start(),
                         'type': 'function_call',
-                        'function': match.group(1),
-                        'object': None,
-                        'module': None,
-                        'full_expression': match.group(1),
+                        'function': func_name,
+                        'object': obj,
+                        'module': module,
+                        'full_expression': full_expr,
                         'args': []
                     })
             

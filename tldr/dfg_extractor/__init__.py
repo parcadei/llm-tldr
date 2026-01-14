@@ -5,8 +5,6 @@ This package provides backward compatibility while the codebase transitions
 from the monolithic dfg_extractor.py to the package structure.
 """
 
-from tldr.dfg_extractor_legacy import *
-
 from tldr.dfg_extractor_legacy import (
     VarRef,
     DataflowEdge,

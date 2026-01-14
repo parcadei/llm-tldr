@@ -169,10 +169,18 @@ def _find_files_to_scan(
             extensions.update(exts)
     
     # Find files using the helper function
+    # Merge exclude dirs
+    effective_exclude_dirs = set(default_exclude_dirs)
+    if exclude_dirs:
+        effective_exclude_dirs.update(exclude_dirs)
+        
+    # If include_dirs is specified, we still want to apply exclusions like .git or node_modules
+    # The original code disabled exclusions if include_dirs was set, which is unsafe.
+    
     files = find_files_by_extension(
         root_dir=root_dir,
         extensions=list(extensions),
-        exclude_dirs=default_exclude_dirs if not include_dirs else None,
+        exclude_dirs=effective_exclude_dirs,
         include_dirs=include_dirs,
         exclude_patterns=exclude_patterns,
         include_patterns=include_patterns,
@@ -194,8 +202,6 @@ def _process_files(
     max_workers: Optional[int]
 ) -> None:
     """Process all files and extract calls."""
-    
-    from tldr.cross_file_calls.parsers import get_parser_for_file
     
     if parallel and len(files_to_scan) > 1:
         _process_files_parallel(
@@ -249,6 +255,7 @@ def _process_files_parallel(
     """Process files in parallel."""
     
     import concurrent.futures
+    import threading
     from tldr.cross_file_calls.parsers import get_parser_for_file
     
     # Capture verbose and file_timeout for thread-safe access
@@ -257,6 +264,7 @@ def _process_files_parallel(
     
     # Thread-safe error collection
     errors: List[str] = []
+    errors_lock = threading.Lock()
     
     def process_file(file_path: str, timeout: Optional[float], log_verbose: bool) -> Tuple[str, List]:
         """Process a single file and return results."""
@@ -270,7 +278,8 @@ def _process_files_parallel(
             
         except Exception as e:
             if log_verbose:
-                errors.append(f"Error processing {file_path}: {e}")
+                with errors_lock:
+                    errors.append(f"Error processing {file_path}: {e}")
             return file_path, []
     
     # Process files in parallel
@@ -298,8 +307,8 @@ def _build_call_relationships(call_graph: ProjectCallGraph) -> None:
     """
     Build relationships between calls and definitions.
     
-    TODO: Full implementation is in resolver.py.
-    This is a placeholder that marks the graph as processed.
+    Note: This is a placeholder for backward compatibility.
+    The actual resolution logic is implemented in builder._resolve_cross_file_calls.
     """
     # The actual cross-file resolution is done in builder._resolve_cross_file_calls
     # This function is kept for API compatibility

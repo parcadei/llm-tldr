@@ -73,18 +73,28 @@ def _resolve_cross_file_calls(call_graph: ProjectCallGraph, verbose: bool = Fals
             key = (definition.get('name'), definition.get('type'))
             if key not in definition_map:
                 definition_map[key] = []
+            
+            # Include module info if available (inferred from file path or explicit)
+            # For simplicity, we assume module name comes from file path stem for some languages
+            module_name = os.path.splitext(os.path.basename(file_path))[0]
+            
             definition_map[key].append({
                 'file': file_path,
-                'definition': definition
+                'definition': definition,
+                'module': module_name
             })
     
     # Resolve each call to its definition
     resolved_count = 0
     for file_path, file_info in call_graph.files.items():
+        file_imports = file_info.get('imports', [])
+        
         for call in file_info.get('calls', []):
             func_name = call.get('function')
             if not func_name:
                 continue
+            
+            call_module = call.get('module')
             
             # Try to find matching definition
             for def_type in ['function', 'method', 'class']:
@@ -93,14 +103,40 @@ def _resolve_cross_file_calls(call_graph: ProjectCallGraph, verbose: bool = Fals
                     # Found potential matches
                     matches = definition_map[key]
                     
-                    # Prefer definitions from the same file
+                    # 1. Prefer module match if explicit module in call
+                    if call_module:
+                        module_matches = [m for m in matches if m['module'] == call_module]
+                        if module_matches:
+                            call['resolved_to'] = module_matches[0]
+                            resolved_count += 1
+                            break
+                    
+                    # 2. Prefer definitions from the same file
                     same_file_matches = [m for m in matches if m['file'] == file_path]
                     if same_file_matches:
                         call['resolved_to'] = same_file_matches[0]
-                    else:
-                        # Use first match from other files
-                        call['resolved_to'] = matches[0]
+                        resolved_count += 1
+                        break
+                        
+                    # 3. Check imports
+                    import_match = False
+                    for match in matches:
+                        match_module = match['module']
+                        # Check if this module is imported
+                        for imp in file_imports:
+                            if imp.get('module') == match_module or imp.get('name') == match_module:
+                                call['resolved_to'] = match
+                                resolved_count += 1
+                                import_match = True
+                                break
+                        if import_match:
+                            break
                     
+                    if import_match:
+                        break
+
+                    # 4. Fallback: Use first match from other files
+                    call['resolved_to'] = matches[0]
                     resolved_count += 1
                     break
     

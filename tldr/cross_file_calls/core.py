@@ -4,7 +4,7 @@ Core types and constants for cross-file call graph resolution.
 
 from dataclasses import dataclass, field
 from functools import lru_cache
-from typing import Dict, List, Optional, Set
+from typing import Dict, List, Optional
 
 
 def _check_tree_sitter_availability(module_name: str) -> bool:
@@ -61,6 +61,8 @@ class ProjectCallGraph:
 
     _edges: set[tuple[str, str, str, str]] = field(default_factory=set)
     _files: Dict[str, Dict] = field(default_factory=dict)
+    _cached_calls: Optional[List[Dict]] = field(default=None, init=False)
+    _cached_definitions: Optional[List[Dict]] = field(default=None, init=False)
 
     def add_edge(self, src_file: str, src_func: str, dst_file: str, dst_func: str):
         """Add a call edge from src_file:src_func to dst_file:dst_func."""
@@ -71,12 +73,19 @@ class ProjectCallGraph:
         if file_path not in self._files:
             self._files[file_path] = {'definitions': [], 'calls': []}
         self._files[file_path]['calls'].extend(calls)
+        self._invalidate_cache()
 
     def add_definition(self, file_path: str, definition: Dict):
         """Add a definition to a file."""
         if file_path not in self._files:
             self._files[file_path] = {'definitions': [], 'calls': []}
         self._files[file_path]['definitions'].append(definition)
+        self._invalidate_cache()
+    
+    def _invalidate_cache(self):
+        """Invalidate cached calls and definitions."""
+        self._cached_calls = None
+        self._cached_definitions = None
 
     @property
     def edges(self) -> set[tuple[str, str, str, str]]:
@@ -91,18 +100,22 @@ class ProjectCallGraph:
     @property
     def calls(self) -> List[Dict]:
         """Return all calls from all files."""
-        all_calls = []
-        for file_info in self._files.values():
-            all_calls.extend(file_info.get('calls', []))
-        return all_calls
+        if self._cached_calls is None:
+            all_calls = []
+            for file_info in self._files.values():
+                all_calls.extend(file_info.get('calls', []))
+            self._cached_calls = all_calls
+        return self._cached_calls
 
     @property
     def definitions(self) -> List[Dict]:
         """Return all definitions from all files."""
-        all_definitions = []
-        for file_info in self._files.values():
-            all_definitions.extend(file_info.get('definitions', []))
-        return all_definitions
+        if self._cached_definitions is None:
+            all_definitions = []
+            for file_info in self._files.values():
+                all_definitions.extend(file_info.get('definitions', []))
+            self._cached_definitions = all_definitions
+        return self._cached_definitions
 
     def __contains__(self, edge: tuple[str, str, str, str]) -> bool:
         """Check if an edge exists in the graph."""

@@ -110,10 +110,15 @@ class CParser(BaseParser):
                     if child.type != ','
                 ]
                 for position, child in enumerate(non_comma_children):
+                    # Extract source text for the argument if possible
+                    arg_value = None
+                    if hasattr(child, 'text'):
+                         arg_value = child.text.decode('utf-8')
+                    
                     args.append({
                         'position': position,
                         'type': 'positional',
-                        'value': None,
+                        'value': arg_value,
                         'name': None
                     })
         except Exception:

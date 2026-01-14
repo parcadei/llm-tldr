@@ -55,7 +55,8 @@ class LuaParser(LuaBaseParser):
             imports = []
             
             for line_num, line in enumerate(content.split('\n'), 1):
-                match = re.search(r'require\s+[\'"]([^\'"]+)[\'"]', line)
+                # Support require "mod" and require("mod")
+                match = re.search(r'require\s*\(?\s*[\'"]([^\'"]+)[\'"]', line)
                 if match:
                     imports.append({
                         'type': 'require',

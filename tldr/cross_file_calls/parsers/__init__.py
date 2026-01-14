@@ -84,11 +84,13 @@ def get_parser_for_file(file_path: str) -> Optional[BaseParser]:
         return None
     
     language = EXTENSION_MAP[ext]
-    if language not in PARSERS:
-        return None
-    
-    parser_class = PARSERS[language]
-    return parser_class()
+    # Redundant check removed: PARSERS is derived from EXTENSION_MAP logic usually, 
+    # but here we just lookup directly.
+    # If we want to be safe:
+    parser_class = PARSERS.get(language)
+    if parser_class:
+        return parser_class()
+    return None
 
 
 def get_parser_for_language(language: str) -> Optional[BaseParser]:

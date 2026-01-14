@@ -67,15 +67,16 @@ class CppParser(BaseParser):
             calls = []
             
             # C++ function call patterns (including method calls)
+            # Combined pattern to avoid duplicates: matches Name( or Scope::Name(
             patterns = [
-                r'(\b[a-zA-Z_]\w*)\s*\(',
-                r'(\b[a-zA-Z_]\w*::[a-zA-Z_]\w*)\s*\(',
+                r'(\b(?:[a-zA-Z_]\w*::)*[a-zA-Z_]\w*)\s*\(',
             ]
             
             for line_num, line in enumerate(content.split('\n'), 1):
                 for pattern in patterns:
                     for match in re.finditer(pattern, line):
-                        func_name = match.group(1).split('::')[-1]
+                        full_match = match.group(1)
+                        func_name = full_match.split('::')[-1]
                         
                         # Skip C++ keywords
                         if func_name in CPP_KEYWORDS:
