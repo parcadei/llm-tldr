@@ -5,6 +5,7 @@ These functions wrap the TLDR API with automatic caching via SalsaDB.
 Results are memoized and automatically invalidated when source files change.
 """
 
+from dataclasses import asdict
 from pathlib import Path
 
 from tldr.salsa import SalsaDB, salsa_query
@@ -97,7 +98,7 @@ def cached_context(db: SalsaDB, project: str, entry: str, language: str, depth: 
     """Cached relevant context - memoized by SalsaDB."""
     from tldr.api import get_relevant_context
     result = get_relevant_context(project, entry, language=language, depth=depth)
-    return {"status": "ok", "result": result}
+    return {"status": "ok", "result": asdict(result)}
 
 
 @salsa_query
