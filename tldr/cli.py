@@ -418,9 +418,20 @@ Semantic Search:
     daemon_status_p.add_argument("--project", "-p", default=".", help="Project path (default: current directory)")
 
     # tldr daemon query CMD [--project PATH]
-    daemon_query_p = daemon_sub.add_parser("query", help="Send raw JSON command to daemon")
-    daemon_query_p.add_argument("cmd", help="Command to send (e.g., ping, status, search)")
-    daemon_query_p.add_argument("--project", "-p", default=".", help="Project path (default: current directory)")
+    # or: tldr daemon query --json '{"cmd":"semantic","action":"search",...}'
+    daemon_query_p = daemon_sub.add_parser("query", help="Send command to daemon")
+    daemon_query_p.add_argument(
+        "cmd",
+        nargs="?",
+        help="Simple command name (e.g., ping, status). Ignored if --json is provided.",
+    )
+    daemon_query_p.add_argument(
+        "--json",
+        help="Raw JSON command to send (e.g., '{\"cmd\":\"semantic\",\"action\":\"search\",\"query\":\"...\"}')",
+    )
+    daemon_query_p.add_argument(
+        "--project", "-p", default=".", help="Project path (default: current directory)"
+    )
 
     # tldr daemon notify FILE [--project PATH]
     daemon_notify_p = daemon_sub.add_parser("notify", help="Notify daemon of file change (triggers reindex at threshold)")
@@ -1186,7 +1197,21 @@ Semantic Search:
 
             elif args.action == "query":
                 try:
-                    result = query_daemon(project_path, {"cmd": args.cmd})
+                    # If --json is provided, send raw JSON payload to daemon.
+                    # Otherwise, fall back to simple {"cmd": CMD} behavior.
+                    if getattr(args, "json", None):
+                        try:
+                            command = json.loads(args.json)
+                        except json.JSONDecodeError as e:
+                            print(f"Error: invalid JSON for --json: {e}", file=sys.stderr)
+                            sys.exit(1)
+                    else:
+                        if not args.cmd:
+                            print("Error: either CMD or --json must be provided", file=sys.stderr)
+                            sys.exit(1)
+                        command = {"cmd": args.cmd}
+
+                    result = query_daemon(project_path, command)
                     print(json.dumps(result, indent=2))
                 except (ConnectionRefusedError, FileNotFoundError):
                     print("Error: Daemon not running", file=sys.stderr)
