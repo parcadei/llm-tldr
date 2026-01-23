@@ -82,7 +82,8 @@ The semantic layer combines all 5 layers into searchable embeddings, enabling na
 ### Exclude Files (.tldrignore)
 
 Create `.tldrignore` in project root (gitignore syntax):
-```
+
+```gitignore
 node_modules/
 .venv/
 __pycache__/
