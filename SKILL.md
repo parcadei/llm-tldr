@@ -115,7 +115,7 @@ For monorepos, create `.claude/workspace.json`:
 
 ## MCP Integration
 
-**For Claude Code** (`.claude/settings.json`):
+**For Claude Code** (`.mcp.json` in project root, or `~/.claude.json` for user-scope):
 ```json
 {
   "mcpServers": {
