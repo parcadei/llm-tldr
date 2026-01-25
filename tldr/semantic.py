@@ -733,6 +733,104 @@ def _process_file_for_extraction(
         except Exception as e:
             logger.debug(f"AST parse failed for {file_path}: {e}")
 
+    elif lang == "php":
+        try:
+            from tree_sitter import Language, Parser
+            # Import PHP parser from cross_file_calls
+            from tldr.cross_file_calls import _get_php_parser
+
+            parser = _get_php_parser()
+            if parser:
+                tree = parser.parse(bytes(content, "utf8"))
+                root_node = tree.root_node
+
+                def find_parent_class(node, class_name=None):
+                    """Find parent class by walking up from method node."""
+                    if node is None or node.id == root_node.id:
+                        return class_name
+                    parent = node.parent
+                    if parent and parent.type == "class_declaration":
+                        for child in parent.children:
+                            if child.type == "name":
+                                return content[child.start_byte:child.end_byte]
+                    return find_parent_class(parent, class_name)
+
+                def extract_code_preview(node, start_line):
+                    """Extract first 10 lines from function body."""
+                    # Find function body
+                    body_node = None
+                    for child in node.children:
+                        if child.type == "compound_statement":
+                            body_node = child
+                            break
+
+                    if body_node:
+                        body_start = body_node.start_point[0]
+                        body_end = min(body_node.end_point[0] + 1, body_start + 10)
+                        return '\n'.join(lines[body_start:body_end])
+                    return ""
+
+                def extract_function_signature(node, name):
+                    """Extract function signature from PHP function node."""
+                    params = []
+                    for child in node.children:
+                        if child.type == "formal_parameters":
+                            for param in child.children:
+                                if param.type == "simple_parameter" or param.type == "variadic_parameter":
+                                    for param_child in param.children:
+                                        if param_child.type == "variable_name":
+                                            params.append("$" + content[param_child.start_byte:param_child.end_byte])
+                                            break
+                    return f"function {name}({', '.join(params)})"
+
+                def walk_tree(node):
+                    """Walk tree-sitter AST to find functions and classes."""
+                    if node.type == "function_declaration":
+                        func_name = None
+                        for child in node.children:
+                            if child.type == "name":
+                                func_name = content[child.start_byte:child.end_byte]
+                                break
+
+                        if func_name:
+                            start_line = node.start_point[0] + 1
+                            parent_class = find_parent_class(node)
+                            code_preview = extract_code_preview(node, start_line)
+                            signature = extract_function_signature(node, func_name)
+
+                            if parent_class:
+                                key = f"{parent_class}.{func_name}"
+                                ast_info["methods"][key] = {
+                                    "line": start_line,
+                                    "code_preview": code_preview
+                                }
+                                all_signatures[key] = signature
+                                all_docstrings[key] = ""
+                            else:
+                                ast_info["functions"][func_name] = {
+                                    "line": start_line,
+                                    "code_preview": code_preview
+                                }
+                                all_signatures[func_name] = signature
+                                all_docstrings[func_name] = ""
+
+                    elif node.type == "class_declaration":
+                        class_name = None
+                        for child in node.children:
+                            if child.type == "name":
+                                class_name = content[child.start_byte:child.end_byte]
+                                break
+                        if class_name:
+                            ast_info["classes"][class_name] = {"line": node.start_point[0] + 1}
+
+                    for child in node.children:
+                        walk_tree(child)
+
+                walk_tree(root_node)
+
+        except Exception as e:
+            logger.debug(f"PHP AST parse failed for {file_path}: {e}")
+
     # Get dependencies (imports) - single call
     dependencies = ""
     try:
@@ -758,6 +856,10 @@ def _process_file_for_extraction(
             from tldr.cfg_extractor import extract_typescript_cfg
             from tldr.dfg_extractor import extract_typescript_dfg
             return extract_typescript_cfg, extract_typescript_dfg
+        elif language == "php":
+            from tldr.cfg_extractor import extract_php_cfg
+            from tldr.dfg_extractor import extract_php_dfg
+            return extract_php_cfg, extract_php_dfg
         return None, None
 
     cfg_extractor, dfg_extractor = _get_extractors(lang)
