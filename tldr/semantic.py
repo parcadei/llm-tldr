@@ -957,15 +957,26 @@ def _process_file_for_extraction(
 
     # Process functions
     for func_name in file_info.get("functions", []):
+        # Try direct lookup first (standalone functions)
         func_info = ast_info.get("functions", {}).get(func_name, {})
+
+        # If not found, try methods (PHP class methods are in functions list)
+        if not func_info:
+            # Look for any method ending with this function name
+            for method_key, method_info in ast_info.get("methods", {}).items():
+                if method_key.endswith(f".{func_name}"):
+                    func_info = method_info
+                    func_name = method_key  # Use qualified name for signature lookup
+                    break
+
         unit = EmbeddingUnit(
-            name=func_name,
-            qualified_name=f"{file_path.replace('/', '.')}.{func_name}",
+            name=func_name.split(".")[-1] if "." in func_name else func_name,
+            qualified_name=f"{file_path.replace('/', '.')}.{func_name.split('.')[-1] if '.' in func_name else func_name}",
             file=file_path,
             line=func_info.get("line", 1),
             language=lang,
             unit_type="function",
-            signature=all_signatures.get(func_name, f"def {func_name}(...)"),
+            signature=all_signatures.get(func_name, f"def {func_name.split('.')[-1] if '.' in func_name else func_name}(...)"),
             docstring=all_docstrings.get(func_name, ""),
             calls=calls_map.get(func_name, [])[:5],
             called_by=called_by_map.get(func_name, [])[:5],
