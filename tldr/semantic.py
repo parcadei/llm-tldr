@@ -131,6 +131,33 @@ class EmbeddingUnit:
 MODEL_NAME = "BAAI/bge-large-en-v1.5"  # Legacy, use SUPPORTED_MODELS
 
 
+def _get_device() -> str:
+    """Auto-detect the best available device for embeddings.
+
+    Returns:
+        "cuda" if GPU is available, otherwise "cpu".
+    """
+    try:
+        import torch
+        if torch.cuda.is_available():
+            # Check if CUDA is actually working (not just available)
+            try:
+                # Test with a small tensor
+                test_tensor = torch.zeros(1).cuda()
+                del test_tensor
+                torch.cuda.empty_cache()
+                return "cuda"
+            except Exception as e:
+                logger.debug(f"CUDA available but failed: {e}, falling back to CPU")
+                return "cpu"
+    except ImportError:
+        logger.debug("PyTorch not available, using CPU")
+    except Exception as e:
+        logger.debug(f"Error detecting GPU: {e}, using CPU")
+
+    return "cpu"
+
+
 def _model_exists_locally(hf_name: str) -> bool:
     """Check if a model is already downloaded locally."""
     try:
@@ -204,7 +231,16 @@ def get_model(model_name: Optional[str] = None):
             raise ValueError(f"Model download declined. Use --model to choose a smaller model.")
 
     from sentence_transformers import SentenceTransformer
-    _model = SentenceTransformer(hf_name)
+
+    # Auto-detect GPU availability
+    device = _get_device()
+
+    if device == "cuda":
+        logger.info(f"🚀 Using GPU (CUDA) for embeddings - {hf_name}")
+    else:
+        logger.debug(f"Using CPU for embeddings - {hf_name}")
+
+    _model = SentenceTransformer(hf_name, device=device)
     _model_name = hf_name
     return _model
 
