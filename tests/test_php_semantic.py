@@ -45,6 +45,101 @@ class UserService {
 """
 
 
+# Laravel-style code with controllers and models
+LARAVEL_CONTROLLER = """
+<?php
+
+namespace App\\Http\\Controllers;
+
+use App\\Models\\User;
+use Illuminate\\Http\\Request;
+
+class UserController extends Controller
+{
+    public function index()
+    {
+        $users = User::paginate(15);
+        return view('users.index', compact('users'));
+    }
+
+    public function store(Request $request)
+    {
+        $validated = $request->validate([
+            'name' => 'required|string|max:255',
+            'email' => 'required|email|unique:users',
+        ]);
+
+        $user = User::create($validated);
+        return redirect()->route('users.show', $user);
+    }
+
+    public function update(Request $request, User $user)
+    {
+        if ($request->user()->cannot('update', $user)) {
+            abort(403);
+        }
+
+        $user->update($validated);
+        return response()->json($user);
+    }
+}
+"""
+
+
+# PHP with traits
+PHP_WITH_TRAITS = """
+<?php
+
+trait Loggable {
+    public function log($message) {
+        return "[LOG] {$message}";
+    }
+
+    protected function debug($data) {
+        var_dump($data);
+    }
+}
+
+trait Cacheable {
+    public function cache($key, $value) {
+        return cache()->put($key, $value);
+    }
+}
+
+class UserService {
+    use Loggable, Cacheable;
+
+    public function process($data) {
+        $this->log("Processing data");
+        return $this->cache('result', $data);
+    }
+}
+"""
+
+
+# PHP with closures and arrow functions
+PHP_WITH_CLOSURES = """
+<?php
+
+function applyOperation($data, callable $operation) {
+    return $operation($data);
+}
+
+$double = fn($x) => $x * 2;
+
+class Router {
+    public function get($path, $handler) {
+        return ['method' => 'GET', 'path' => $path, 'handler' => $handler];
+    }
+}
+
+$router = new Router();
+$router->get('/users', function() {
+    return User::all();
+});
+"""
+
+
 @pytest.fixture
 def temp_php_project(tmp_path):
     """Create a temporary PHP project."""
@@ -217,6 +312,71 @@ def example(x):
         assert php_cfg.startswith("complexity:"), f"PHP format: {php_cfg}"
         assert ", blocks:" in py_cfg
         assert ", blocks:" in php_cfg
+
+
+class TestLaravelSupport:
+    """Test that Laravel-style controllers work correctly."""
+
+    def test_laravel_controller_methods(self, tmp_path):
+        """Laravel controller methods should be extracted with CFG/DFG."""
+        from tldr.semantic import _get_cfg_summary, _get_dfg_summary
+
+        controller_file = tmp_path / "UserController.php"
+        controller_file.write_text(LARAVEL_CONTROLLER)
+
+        # Test index method (simple)
+        cfg_index = _get_cfg_summary(controller_file, "index", "php")
+        assert cfg_index != "", "index method should have CFG summary"
+        assert "complexity:" in cfg_index
+
+        # Test store method (has validation with array)
+        cfg_store = _get_cfg_summary(controller_file, "store", "php")
+        assert cfg_store != "", "store method should have CFG summary"
+        dfg_store = _get_dfg_summary(controller_file, "store", "php")
+        assert dfg_store != "", "store method should have DFG summary"
+        assert "vars:" in dfg_store
+
+        # Test update method (has nested condition)
+        cfg_update = _get_cfg_summary(controller_file, "update", "php")
+        assert cfg_update != "", "update method should have CFG summary"
+        # update has nested if, so complexity should be >= 2
+        assert "complexity:" in cfg_update
+
+
+class TestTraitSupport:
+    """Test that PHP traits are handled correctly."""
+
+    def test_traits_dont_crash_parsing(self, tmp_path):
+        """Traits should be parseable without errors."""
+        from tldr.semantic import _get_cfg_summary
+
+        trait_file = tmp_path / "UserService.php"
+        trait_file.write_text(PHP_WITH_TRAITS)
+
+        # Class methods that use traits should work
+        cfg = _get_cfg_summary(trait_file, "process", "php")
+        assert cfg != "", "process method should have CFG summary"
+
+        # Trait methods themselves (when called directly)
+        # Note: In practice, trait methods are accessed through the using class
+
+
+class TestClosureSupport:
+    """Test closures and arrow functions."""
+
+    def test_closures_in_code(self, tmp_path):
+        """Closures and arrow functions should be parseable."""
+        from tldr.semantic import _get_cfg_summary
+
+        closure_file = tmp_path / "functions.php"
+        closure_file.write_text(PHP_WITH_CLOSURES)
+
+        # Regular function with callable parameter should work
+        cfg = _get_cfg_summary(closure_file, "applyOperation", "php")
+        assert cfg != "", "applyOperation should have CFG summary"
+
+        # Arrow functions and closures in top-level code
+        # won't appear as named functions, but shouldn't crash parsing
 
 
 if __name__ == "__main__":

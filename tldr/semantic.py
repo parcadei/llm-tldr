@@ -784,7 +784,7 @@ def _process_file_for_extraction(
                     return f"function {name}({', '.join(params)})"
 
                 def walk_tree(node):
-                    """Walk tree-sitter AST to find functions and classes."""
+                    """Walk tree-sitter AST to find functions, classes, and traits."""
                     if node.type == "function_declaration":
                         func_name = None
                         for child in node.children:
@@ -822,6 +822,16 @@ def _process_file_for_extraction(
                                 break
                         if class_name:
                             ast_info["classes"][class_name] = {"line": node.start_point[0] + 1}
+
+                    elif node.type == "trait_declaration":
+                        # Track traits for class composition
+                        trait_name = None
+                        for child in node.children:
+                            if child.type == "name":
+                                trait_name = content[child.start_byte:child.end_byte]
+                                break
+                        if trait_name:
+                            ast_info["classes"][trait_name] = {"line": node.start_point[0] + 1, "type": "trait"}
 
                     for child in node.children:
                         walk_tree(child)
