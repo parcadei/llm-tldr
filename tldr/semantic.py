@@ -822,18 +822,18 @@ def _process_file_for_extraction(
                 root_node = tree.root_node
                 logger.debug(f"Parsed {file_path} with PHP tree-sitter, root: {root_node.type}")
 
-                def find_parent_class(node, class_name=None):
+                def find_parent_class(node):
                     """Find parent class by walking up from method node."""
-                    if node is None or node.id == root_node.id:
-                        return class_name
-                    parent = node.parent
-                    if parent and parent.type == "class_declaration":
-                        for child in parent.children:
-                            if child.type == "name":
-                                return content[child.start_byte:child.end_byte]
-                    return find_parent_class(parent, class_name)
+                    current = node.parent
+                    while current and current.id != root_node.id:
+                        if current.type == "class_declaration":
+                            for child in current.children:
+                                if child.type == "name":
+                                    return content[child.start_byte:child.end_byte]
+                        current = current.parent
+                    return None
 
-                def extract_code_preview(node, start_line, func_name=None):
+                def extract_code_preview(node, func_name=None):
                     """Extract first 10 lines from function body, or signature if abstract/interface."""
                     # Find function body
                     body_node = None
@@ -860,10 +860,8 @@ def _process_file_for_extraction(
                         if child.type == "formal_parameters":
                             for param in child.children:
                                 if param.type == "simple_parameter" or param.type == "variadic_parameter":
-                                    for param_child in param.children:
-                                        if param_child.type == "variable_name":
-                                            params.append(content[param_child.start_byte:param_child.end_byte])
-                                            break
+                                    # Extract full parameter text including type hints
+                                    params.append(content[param.start_byte:param.end_byte].strip())
                     return f"function {name}({', '.join(params)})"
 
                 def walk_tree(node):
@@ -878,7 +876,7 @@ def _process_file_for_extraction(
                         if func_name:
                             start_line = node.start_point[0] + 1
                             parent_class = find_parent_class(node)
-                            code_preview = extract_code_preview(node, start_line, func_name)
+                            code_preview = extract_code_preview(node, func_name)
                             signature = extract_function_signature(node, func_name)
 
                             if parent_class:

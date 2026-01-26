@@ -79,6 +79,11 @@ class UserController extends Controller
             abort(403);
         }
 
+        $validated = $request->validate([
+            'name' => 'required|string|max:255',
+            'email' => 'required|email|unique:users,email,'.$user->id,
+        ]);
+
         $user->update($validated);
         return response()->json($user);
     }
@@ -210,8 +215,6 @@ class TestSemanticPHPExtraction:
         from tldr.semantic import _process_file_for_extraction
         from tldr.cross_file_calls import build_project_call_graph
 
-        file_path = Path(temp_php_project) / "functions.php"
-
         # Build call graph for PHP
         call_graph = build_project_call_graph(temp_php_project, language="php")
 
@@ -219,7 +222,7 @@ class TestSemanticPHPExtraction:
         calls_map = {}
         called_by_map = {}
         for edge in call_graph.edges:
-            src_file, src_func, dst_file, dst_func = edge
+            _src_file, src_func, _dst_file, dst_func = edge
             if src_func not in calls_map:
                 calls_map[src_func] = []
             calls_map[src_func].append(dst_func)
@@ -264,7 +267,7 @@ class TestSemanticPHPExtraction:
         getUser = next((u for u in method_units if u.name == "getUser"), None)
         assert getUser is not None, "getUser method should be extracted"
         # Check CFG summary for method
-        assert getUser.cfg_summary != "", f"getUser should have cfg_summary"
+        assert getUser.cfg_summary != "", "getUser should have cfg_summary"
 
     def test_php_method_unit_type_not_function(self, temp_php_project):
         """PHP class methods should have unit_type='method', not 'function'."""
