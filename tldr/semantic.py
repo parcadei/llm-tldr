@@ -28,6 +28,7 @@ ALL_LANGUAGES = ["python", "typescript", "javascript", "go", "rust", "java", "c"
 # Lazy imports for heavy dependencies
 _model = None
 _model_name = None  # Track which model is loaded
+_model_device = None  # Track which device the model is loaded on
 
 # Supported models with approximate download sizes
 SUPPORTED_MODELS = {
@@ -167,12 +168,46 @@ def _confirm_download(model_key: str) -> bool:
         return False
 
 
-def get_model(model_name: Optional[str] = None):
+def _get_device() -> str:
+    """Get the device to use for model inference.
+
+    Checks TLDR_DEVICE environment variable first, then auto-detects.
+    On Apple Silicon, defaults to CPU to avoid MPS stability issues.
+
+    Returns:
+        Device string: "cpu", "cuda", or "mps"
+    """
+    # Check environment variable first
+    env_device = os.environ.get("TLDR_DEVICE", "").lower()
+    if env_device in ("cpu", "cuda", "mps"):
+        return env_device
+
+    # Check for MPS fallback mode (set by our wrapper scripts)
+    if os.environ.get("PYTORCH_ENABLE_MPS_FALLBACK") == "1":
+        return "cpu"
+
+    # Auto-detect: prefer CUDA, then CPU (skip MPS due to stability issues)
+    try:
+        import torch
+        if torch.cuda.is_available():
+            return "cuda"
+        # Note: We intentionally skip MPS even if available due to
+        # known crashes in MetalPerformanceShaders (SIGABRT in MPSKey_Compile).
+        # Users can force MPS with TLDR_DEVICE=mps if they want to try it.
+    except ImportError:
+        pass
+
+    return "cpu"
+
+
+def get_model(model_name: Optional[str] = None, device: Optional[str] = None):
     """Lazy-load the embedding model (cached).
 
     Args:
         model_name: Model key from SUPPORTED_MODELS, or None for default.
                    Can also be a full HuggingFace model name.
+        device: Device to use ("cpu", "cuda", "mps"). If None, auto-detects.
+                Can also be set via TLDR_DEVICE environment variable.
 
     Returns:
         SentenceTransformer model instance.
@@ -180,7 +215,7 @@ def get_model(model_name: Optional[str] = None):
     Raises:
         ValueError: If model not found or user declines download.
     """
-    global _model, _model_name
+    global _model, _model_name, _model_device
 
     # Resolve model name
     if model_name is None:
@@ -193,19 +228,38 @@ def get_model(model_name: Optional[str] = None):
         # Allow arbitrary HuggingFace model names
         hf_name = model_name
 
-    # Return cached model if same
-    if _model is not None and _model_name == hf_name:
+    # Resolve device
+    if device is None:
+        device = _get_device()
+
+    # Return cached model if same model and device
+    if _model is not None and _model_name == hf_name and _model_device == device:
         return _model
 
     # Check if model needs downloading
     if not _model_exists_locally(hf_name):
         model_key = model_name if model_name in SUPPORTED_MODELS else None
         if model_key and not _confirm_download(model_key):
-            raise ValueError(f"Model download declined. Use --model to choose a smaller model.")
+            raise ValueError("Model download declined. Use --model to choose a smaller model.")
 
     from sentence_transformers import SentenceTransformer
-    _model = SentenceTransformer(hf_name)
+
+    logger.info("Loading model %s on device: %s", hf_name, device)
+
+    actual_device = device
+    try:
+        _model = SentenceTransformer(hf_name, device=device)
+    except Exception as e:
+        # If MPS fails, fall back to CPU
+        if device == "mps":
+            logger.warning("MPS failed (%s), falling back to CPU", e)
+            _model = SentenceTransformer(hf_name, device="cpu")
+            actual_device = "cpu"
+        else:
+            raise
+
     _model_name = hf_name
+    _model_device = actual_device
     return _model
 
 
@@ -262,19 +316,20 @@ def build_embedding_text(unit: EmbeddingUnit) -> str:
     return "\n".join(parts)
 
 
-def compute_embedding(text: str, model_name: Optional[str] = None):
+def compute_embedding(text: str, model_name: Optional[str] = None, device: Optional[str] = None):
     """Compute embedding vector for text.
 
     Args:
         text: The text to embed.
         model_name: Model to use (from SUPPORTED_MODELS or HF name).
+        device: Device for inference ("cpu", "cuda", "mps"). If None, auto-detects.
 
     Returns:
         numpy array with L2-normalized embedding.
     """
     import numpy as np
 
-    model = get_model(model_name)
+    model = get_model(model_name, device=device)
 
     # BGE models work best with instruction prefix for queries
     # For document embedding, we use text directly
@@ -936,6 +991,7 @@ def build_semantic_index(
     model: Optional[str] = None,
     show_progress: bool = True,
     respect_ignore: bool = True,
+    device: Optional[str] = None,
 ) -> int:
     """Build and save FAISS index + metadata for a project.
 
@@ -949,6 +1005,8 @@ def build_semantic_index(
         model: Model name from SUPPORTED_MODELS or HuggingFace name.
         show_progress: Show progress spinner (default: True).
         respect_ignore: If True, respect .tldrignore patterns (default True).
+        device: Device for inference ("cpu", "cuda", "mps"). If None, auto-detects.
+                Set TLDR_DEVICE environment variable to override.
 
     Returns:
         Number of indexed units.
@@ -1016,8 +1074,6 @@ def build_semantic_index(
     if not units:
         return 0
 
-    import numpy as np
-
     BATCH_SIZE = 64
     num_units = len(units)
     texts = [build_embedding_text(unit) for unit in units]
@@ -1033,7 +1089,7 @@ def build_semantic_index(
         ) as progress:
             task = progress.add_task("Computing embeddings...", total=num_units)
 
-            model_obj = get_model(model)
+            model_obj = get_model(model, device=device)
             all_embeddings = []
 
             for i in range(0, num_units, BATCH_SIZE):
@@ -1056,7 +1112,7 @@ def build_semantic_index(
 
             embeddings_matrix = np.vstack(all_embeddings)
     else:
-        model_obj = get_model(model)
+        model_obj = get_model(model, device=device)
         result = model_obj.encode(
             texts,
             batch_size=BATCH_SIZE,
@@ -1094,6 +1150,7 @@ def semantic_search(
     k: int = 5,
     expand_graph: bool = False,
     model: Optional[str] = None,
+    device: Optional[str] = None,
 ) -> List[dict]:
     """Search for code units semantically.
 
@@ -1104,6 +1161,7 @@ def semantic_search(
         expand_graph: If True, include callers/callees in results.
         model: Model to use for query embedding. If None, uses
                the model from the index metadata.
+        device: Device for inference ("cpu", "cuda", "mps"). If None, auto-detects.
 
     Returns:
         List of result dictionaries with name, file, line, score, etc.
@@ -1142,7 +1200,7 @@ def semantic_search(
 
     # Embed query (with instruction prefix for BGE)
     query_text = f"Represent this code search query: {query}"
-    query_embedding = compute_embedding(query_text, model_name=model)
+    query_embedding = compute_embedding(query_text, model_name=model, device=device)
     query_embedding = query_embedding.reshape(1, -1)
 
     # Search

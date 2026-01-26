@@ -148,6 +148,11 @@ Semantic Search:
     First run downloads embedding model (1.3GB default).
     Use --model all-MiniLM-L6-v2 for smaller 80MB model.
     Set TLDR_AUTO_DOWNLOAD=1 to skip download prompts.
+
+    Device Selection:
+    Use --device to choose inference device (cpu, cuda, mps).
+    Default: CPU (MPS skipped due to stability issues on macOS).
+    Set TLDR_DEVICE=cpu/cuda/mps environment variable to override.
         """,
     )
 
@@ -385,6 +390,12 @@ Semantic Search:
         default=None,
         help="Embedding model: bge-large-en-v1.5 (1.3GB, default) or all-MiniLM-L6-v2 (80MB)",
     )
+    index_p.add_argument(
+        "--device",
+        default=None,
+        choices=["cpu", "cuda", "mps"],
+        help="Device for inference (default: auto-detect, prefers CPU over MPS for stability)",
+    )
 
     # tldr semantic search <query>
     search_p = semantic_sub.add_parser("search", help="Search semantically")
@@ -397,6 +408,12 @@ Semantic Search:
         "--model",
         default=None,
         help="Embedding model (uses index model if not specified)",
+    )
+    search_p.add_argument(
+        "--device",
+        default=None,
+        choices=["cpu", "cuda", "mps"],
+        help="Device for inference (default: auto-detect, prefers CPU over MPS for stability)",
     )
 
     # tldr daemon start/stop/status/query
@@ -969,16 +986,19 @@ Semantic Search:
 
             if args.action == "index":
                 respect_ignore = not getattr(args, 'no_ignore', False)
-                count = build_semantic_index(args.path, lang=args.lang, model=args.model, respect_ignore=respect_ignore)
+                device = getattr(args, 'device', None)
+                count = build_semantic_index(args.path, lang=args.lang, model=args.model, respect_ignore=respect_ignore, device=device)
                 print(f"Indexed {count} code units")
 
             elif args.action == "search":
+                device = getattr(args, 'device', None)
                 results = semantic_search(
                     args.path,
                     args.query,
                     k=args.k,
                     expand_graph=args.expand,
                     model=args.model,
+                    device=device,
                 )
                 print(json.dumps(results, indent=2))
 
