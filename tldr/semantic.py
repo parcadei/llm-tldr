@@ -215,7 +215,7 @@ def get_model(model_name: Optional[str] = None, device: Optional[str] = None):
     Raises:
         ValueError: If model not found or user declines download.
     """
-    global _model, _model_name
+    global _model, _model_name, _model_device
 
     # Resolve model name
     if model_name is None:
@@ -227,8 +227,6 @@ def get_model(model_name: Optional[str] = None, device: Optional[str] = None):
     else:
         # Allow arbitrary HuggingFace model names
         hf_name = model_name
-
-    global _model, _model_name, _model_device
 
     # Resolve device
     if device is None:
@@ -1075,8 +1073,6 @@ def build_semantic_index(
 
     if not units:
         return 0
-
-    import numpy as np
 
     BATCH_SIZE = 64
     num_units = len(units)
