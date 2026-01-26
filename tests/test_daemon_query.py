@@ -282,3 +282,109 @@ class TestDaemonQueryJsonFlag:
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+
+
+class TestDaemonSocketTruncationFix:
+    """Tests for socket receive truncation bug fix.
+
+    Bug: query_daemon() used client.recv(65536) which only returns data
+    currently available in the socket buffer, not up to the buffer size.
+    Large responses were truncated at ~8192 bytes on macOS.
+
+    Fix: _recv_all() loops until newline delimiter is received.
+    """
+
+    def test_recv_all_handles_large_response_in_chunks(self):
+        """Should receive complete response even when delivered in multiple chunks."""
+        from tldr.daemon.startup import _recv_all
+        from unittest.mock import MagicMock
+        import json
+
+        # Create a mock socket that returns data in 4096-byte chunks
+        mock_socket = MagicMock()
+
+        # Simulate a 20KB response (larger than typical socket buffer)
+        large_response = {"status": "ok", "data": "x" * 20000}
+        response_bytes = (json.dumps(large_response) + "\n").encode()
+
+        # Split into chunks smaller than the response to simulate socket behavior
+        chunk_size = 4096
+        chunks = [response_bytes[i:i+chunk_size] for i in range(0, len(response_bytes), chunk_size)]
+
+        # Mock recv to return chunks sequentially, then empty bytes
+        call_count = [0]
+        def mock_recv(size):
+            if call_count[0] < len(chunks):
+                chunk = chunks[call_count[0]]
+                call_count[0] += 1
+                return chunk
+            return b""  # EOF
+
+        mock_socket.recv.side_effect = mock_recv
+
+        # Call _recv_all
+        result = _recv_all(mock_socket)
+
+        # Verify we got the complete response
+        expected = response_bytes.rstrip(b"\n")
+        assert result == expected, f"Expected {len(expected)} bytes, got {len(result)} bytes"
+        assert len(result) == 20028  # JSON + "x" * 20000 + "\n" minus stripped newline
+
+    def test_recv_all_handles_single_chunk(self):
+        """Should handle responses that fit in a single chunk."""
+        from tldr.daemon.startup import _recv_all
+
+        mock_socket = MagicMock()
+        test_data = b'{"status": "ok"}\n'
+        mock_socket.recv.return_value = test_data
+
+        result = _recv_all(mock_socket)
+
+        assert result == b'{"status": "ok"}'
+        assert mock_socket.recv.call_count == 1
+
+    def test_recv_all_strips_newline_delimiter(self):
+        """Should strip the newline delimiter from the response."""
+        from tldr.daemon.startup import _recv_all
+
+        mock_socket = MagicMock()
+        test_data = b'{"status": "ok"}\n'
+        mock_socket.recv.return_value = test_data
+
+        result = _recv_all(mock_socket)
+
+        assert result == b'{"status": "ok"}'
+        assert not result.endswith(b"\n")
+
+    def test_query_daemon_with_large_response(self):
+        """Should handle large daemon responses without truncation."""
+        from tldr.daemon.startup import query_daemon
+        from unittest.mock import patch, MagicMock
+
+        # Create a 15KB response (larger than 8192 byte bug threshold)
+        large_response = {
+            "status": "ok",
+            "results": [{"file": f"file_{i}.py", "data": "x" * 1000} for i in range(15)]
+        }
+        response_json = json.dumps(large_response) + "\n"
+        response_bytes = response_json.encode()
+
+        # Mock socket that returns data in chunks
+        mock_client = MagicMock()
+        chunk_size = 4096
+        chunks = [response_bytes[i:i+chunk_size] for i in range(0, len(response_bytes), chunk_size)]
+        call_count = [0]
+        def mock_recv(size):
+            if call_count[0] < len(chunks):
+                chunk = chunks[call_count[0]]
+                call_count[0] += 1
+                return chunk
+            return b""
+        mock_client.recv.side_effect = mock_recv
+
+        with patch("tldr.daemon.startup._create_client_socket", return_value=mock_client):
+            result = query_daemon("/fake/project", {"cmd": "test"})
+
+        # Verify complete response was received
+        assert result == large_response
+        assert len(result["results"]) == 15

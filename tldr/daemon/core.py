@@ -385,11 +385,18 @@ class TLDRDaemon:
 
         try:
             max_results = command.get("max_results", 100)
+            # Resolve path parameter (defaults to project root)
+            search_path = command.get("path")
+            if search_path:
+                target_path = self.project / search_path
+            else:
+                target_path = self.project
+
             # Use SalsaDB for cached search
             return self.salsa_db.query(
                 cached_search,
                 self.salsa_db,
-                str(self.project),
+                str(target_path),
                 pattern,
                 max_results,
             )
@@ -488,10 +495,17 @@ class TLDRDaemon:
             entry_points = command.get("entry_points")
             # Convert to tuple for hashability (SalsaDB cache key)
             entry_tuple = tuple(entry_points) if entry_points else ()
+            # Resolve path parameter (defaults to project root)
+            dead_path = command.get("path")
+            if dead_path:
+                target_path = self.project / dead_path
+            else:
+                target_path = self.project
+
             return self.salsa_db.query(
                 cached_dead_code,
                 self.salsa_db,
-                str(self.project),
+                str(target_path),
                 entry_tuple,
                 language,
             )
@@ -503,10 +517,17 @@ class TLDRDaemon:
         """Handle architecture analysis command."""
         try:
             language = command.get("language", "python")
+            # Resolve path parameter (defaults to project root)
+            arch_path = command.get("path")
+            if arch_path:
+                target_path = self.project / arch_path
+            else:
+                target_path = self.project
+
             return self.salsa_db.query(
                 cached_architecture,
                 self.salsa_db,
-                str(self.project),
+                str(target_path),
                 language,
             )
         except Exception as e:
@@ -633,9 +654,16 @@ class TLDRDaemon:
         try:
             from tldr.semantic import build_semantic_index, semantic_search
 
+            # Resolve path parameter (defaults to project root)
+            semantic_path = command.get("path")
+            if semantic_path:
+                target_path = self.project / semantic_path
+            else:
+                target_path = self.project
+
             if action == "index":
                 language = command.get("language", "python")
-                count = build_semantic_index(str(self.project), lang=language)
+                count = build_semantic_index(str(target_path), lang=language)
                 return {"status": "ok", "indexed": count}
 
             elif action == "search":
@@ -643,7 +671,7 @@ class TLDRDaemon:
                 if not query:
                     return {"status": "error", "message": "Missing required parameter: query"}
                 k = command.get("k", 10)
-                results = semantic_search(str(self.project), query, k=k)
+                results = semantic_search(str(target_path), query, k=k)
                 return {"status": "ok", "results": results}
 
             else:
@@ -659,10 +687,17 @@ class TLDRDaemon:
             extensions = command.get("extensions")
             ext_tuple = tuple(extensions) if extensions else ()
             exclude_hidden = command.get("exclude_hidden", True)
+            # Resolve path parameter (defaults to project root)
+            tree_path = command.get("path")
+            if tree_path:
+                target_path = self.project / tree_path
+            else:
+                target_path = self.project
+
             return self.salsa_db.query(
                 cached_tree,
                 self.salsa_db,
-                str(self.project),
+                str(target_path),
                 ext_tuple,
                 exclude_hidden,
             )
@@ -675,10 +710,17 @@ class TLDRDaemon:
         try:
             language = command.get("language", "python")
             max_results = command.get("max_results", 100)
+            # Resolve path parameter (defaults to project root)
+            structure_path = command.get("path")
+            if structure_path:
+                target_path = self.project / structure_path
+            else:
+                target_path = self.project
+
             return self.salsa_db.query(
                 cached_structure,
                 self.salsa_db,
-                str(self.project),
+                str(target_path),
                 language,
                 max_results,
             )
@@ -695,10 +737,17 @@ class TLDRDaemon:
         try:
             language = command.get("language", "python")
             depth = command.get("depth", 2)
+            # Resolve path parameter (defaults to project root)
+            context_path = command.get("path")
+            if context_path:
+                target_path = self.project / context_path
+            else:
+                target_path = self.project
+
             return self.salsa_db.query(
                 cached_context,
                 self.salsa_db,
-                str(self.project),
+                str(target_path),
                 entry,
                 language,
                 depth,
@@ -733,10 +782,17 @@ class TLDRDaemon:
 
         try:
             language = command.get("language", "python")
+            # Resolve path parameter (defaults to project root)
+            importers_path = command.get("path")
+            if importers_path:
+                target_path = self.project / importers_path
+            else:
+                target_path = self.project
+
             return self.salsa_db.query(
                 cached_importers,
                 self.salsa_db,
-                str(self.project),
+                str(target_path),
                 module,
                 language,
             )
