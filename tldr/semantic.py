@@ -28,6 +28,7 @@ ALL_LANGUAGES = ["python", "typescript", "javascript", "go", "rust", "java", "c"
 # Lazy imports for heavy dependencies
 _model = None
 _model_name = None  # Track which model is loaded
+_model_device = None  # Track which device the model is loaded on
 
 # Supported models with approximate download sizes
 SUPPORTED_MODELS = {
@@ -227,35 +228,40 @@ def get_model(model_name: Optional[str] = None, device: Optional[str] = None):
         # Allow arbitrary HuggingFace model names
         hf_name = model_name
 
+    global _model, _model_name, _model_device
+
     # Resolve device
     if device is None:
         device = _get_device()
 
     # Return cached model if same model and device
-    if _model is not None and _model_name == hf_name:
+    if _model is not None and _model_name == hf_name and _model_device == device:
         return _model
 
     # Check if model needs downloading
     if not _model_exists_locally(hf_name):
         model_key = model_name if model_name in SUPPORTED_MODELS else None
         if model_key and not _confirm_download(model_key):
-            raise ValueError(f"Model download declined. Use --model to choose a smaller model.")
+            raise ValueError("Model download declined. Use --model to choose a smaller model.")
 
     from sentence_transformers import SentenceTransformer
 
-    logger.info(f"Loading model {hf_name} on device: {device}")
+    logger.info("Loading model %s on device: %s", hf_name, device)
 
+    actual_device = device
     try:
         _model = SentenceTransformer(hf_name, device=device)
     except Exception as e:
         # If MPS fails, fall back to CPU
         if device == "mps":
-            logger.warning(f"MPS failed ({e}), falling back to CPU")
+            logger.warning("MPS failed (%s), falling back to CPU", e)
             _model = SentenceTransformer(hf_name, device="cpu")
+            actual_device = "cpu"
         else:
             raise
 
     _model_name = hf_name
+    _model_device = actual_device
     return _model
 
 
