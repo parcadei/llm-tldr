@@ -266,6 +266,54 @@ class TestSemanticPHPExtraction:
         # Check CFG summary for method
         assert getUser.cfg_summary != "", f"getUser should have cfg_summary"
 
+    def test_php_method_unit_type_not_function(self, temp_php_project):
+        """PHP class methods should have unit_type='method', not 'function'."""
+        from tldr.semantic import _process_file_for_extraction
+        from tldr.cross_file_calls import build_project_call_graph
+
+        file_path = Path(temp_php_project) / "functions.php"
+
+        # Build call graph
+        call_graph = build_project_call_graph(temp_php_project, language="php")
+        calls_map = {}
+        called_by_map = {}
+        for edge in call_graph.edges:
+            src_file, src_func, dst_file, dst_func = edge
+            if src_func not in calls_map:
+                calls_map[src_func] = []
+            calls_map[src_func].append(dst_func)
+            if dst_func not in called_by_map:
+                called_by_map[dst_func] = []
+            called_by_map[dst_func].append(src_func)
+
+        # Process file - methods appear in both functions[] and classes[].methods[]
+        file_info = {
+            "path": "functions.php",
+            "functions": ["classify", "processData", "getUser"],  # getUser is a method
+            "classes": [{"name": "UserService", "methods": ["getUser"]}]
+        }
+
+        units = _process_file_for_extraction(
+            file_info, temp_php_project, "php", calls_map, called_by_map
+        )
+
+        # Find getUser unit
+        getuser_units = [u for u in units if u.name == "getUser"]
+        assert len(getuser_units) > 0, "getUser should be extracted"
+
+        # Check that getUser has unit_type='method' since it's from a class
+        getuser = getuser_units[0]
+        assert getuser.unit_type == "method", f"getUser should have unit_type='method', got '{getuser.unit_type}'"
+
+        # Check signature uses PHP syntax
+        assert getuser.signature.startswith("function"), f"PHP method signature should start with 'function', got '{getuser.signature}'"
+        assert "def " not in getuser.signature, f"PHP signature should not use Python 'def', got '{getuser.signature}'"
+
+        # Standalone functions should still be unit_type='function'
+        classify = next((u for u in units if u.name == "classify"), None)
+        assert classify is not None, "classify should be extracted"
+        assert classify.unit_type == "function", f"Standalone function should have unit_type='function', got '{classify.unit_type}'"
+
 
 class TestSemanticLayerParity:
     """Test that PHP has parity with Python for semantic features."""

@@ -957,6 +957,15 @@ def _process_file_for_extraction(
             return extract_php_cfg, extract_php_dfg
         return None, None
 
+    def _get_default_signature(name: str, language: str) -> str:
+        """Get default function signature based on language."""
+        if language == "php":
+            return f"function {name}()"
+        elif language in ("typescript", "javascript"):
+            return f"function {name}(...)"
+        else:  # python and others
+            return f"def {name}(...)"
+
     cfg_extractor, dfg_extractor = _get_extractors(lang)
 
     if cfg_extractor and dfg_extractor:
@@ -997,14 +1006,17 @@ def _process_file_for_extraction(
         # Get original func_name for qualified_name
         original_name = func_name.split(".")[-1] if "." in func_name else func_name
 
+        # Determine if this is a method (has dot in qualified name)
+        is_method = "." in func_name
+
         unit = EmbeddingUnit(
             name=original_name,
             qualified_name=f"{file_path.replace('/', '.')}.{original_name}",
             file=file_path,
             line=func_info.get("line", 1),
             language=lang,
-            unit_type="function",
-            signature=all_signatures.get(func_name, f"def {original_name}(...)"),
+            unit_type="method" if (lang == "php" and is_method) else "function",
+            signature=all_signatures.get(func_name, _get_default_signature(original_name, lang)),
             docstring=all_docstrings.get(func_name, ""),
             calls=calls_map.get(func_name, [])[:5],
             called_by=called_by_map.get(func_name, [])[:5],
