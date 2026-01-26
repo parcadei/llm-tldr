@@ -131,6 +131,45 @@ class EmbeddingUnit:
 MODEL_NAME = "BAAI/bge-large-en-v1.5"  # Legacy, use SUPPORTED_MODELS
 
 
+def _get_device() -> str:
+    """Auto-detect the best available device for embeddings.
+
+    Returns:
+        "cuda", "mps", or "cpu" - best available device.
+    Priority: CUDA (NVIDIA) > MPS (Apple M1/M2/M3) > CPU
+    """
+    try:
+        import torch
+
+        # Try CUDA first (NVIDIA GPUs)
+        if torch.cuda.is_available():
+            try:
+                test_tensor = torch.zeros(1).cuda()
+                del test_tensor
+                torch.cuda.empty_cache()
+                return "cuda"
+            except Exception as e:
+                logger.debug(f"CUDA available but failed: {e}, falling back")
+                pass
+
+        # Try MPS for Apple Silicon (M1/M2/M3)
+        if hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
+            try:
+                # Test MPS actually works
+                test_tensor = torch.zeros(1).to("mps")
+                del test_tensor
+                return "mps"
+            except Exception as e:
+                logger.debug(f"MPS available but failed: {e}, falling back to CPU")
+                pass
+    except ImportError:
+        logger.debug("PyTorch not available, using CPU")
+    except Exception as e:
+        logger.debug(f"Error detecting GPU: {e}, using CPU")
+
+    return "cpu"
+
+
 def _model_exists_locally(hf_name: str) -> bool:
     """Check if a model is already downloaded locally."""
     try:
@@ -204,7 +243,18 @@ def get_model(model_name: Optional[str] = None):
             raise ValueError(f"Model download declined. Use --model to choose a smaller model.")
 
     from sentence_transformers import SentenceTransformer
-    _model = SentenceTransformer(hf_name)
+
+    # Auto-detect GPU availability
+    device = _get_device()
+
+    if device == "cuda":
+        logger.info(f"[GPU] Using NVIDIA GPU (CUDA) for embeddings - {hf_name}")
+    elif device == "mps":
+        logger.info(f"[GPU] Using Apple Silicon GPU (MPS) for embeddings - {hf_name}")
+    else:
+        logger.debug(f"[CPU] Using CPU for embeddings - {hf_name}")
+
+    _model = SentenceTransformer(hf_name, device=device)
     _model_name = hf_name
     return _model
 
@@ -283,7 +333,7 @@ def compute_embedding(text: str, model_name: Optional[str] = None):
     return np.array(embedding, dtype=np.float32)
 
 
-def extract_units_from_project(project_path: str, lang: str = "python", respect_ignore: bool = True, progress_callback=None) -> List[EmbeddingUnit]:
+def extract_units_from_project(project_path: str, lang: str = "python", respect_ignore: bool = True, progress_callback=None, skip_call_graph: bool = False, project_root: str = None) -> List[EmbeddingUnit]:
     """Extract all functions/methods/classes from a project.
 
     Uses existing TLDR APIs:
@@ -306,8 +356,11 @@ def extract_units_from_project(project_path: str, lang: str = "python", respect_
     project = Path(project_path).resolve()
     units = []
 
+    # Use project_root if provided, otherwise use project
+    base_path = Path(project_root) if project_root else project
+
     # Load ignore spec before getting structure
-    ignore_spec = load_ignore_patterns(project) if respect_ignore else None
+    ignore_spec = load_ignore_patterns(base_path) if respect_ignore else None
 
     # Get code structure (L1) - use high limit for semantic index
     structure = get_code_structure(str(project), language=lang, max_results=100000, ignore_spec=ignore_spec)
@@ -321,33 +374,49 @@ def extract_units_from_project(project_path: str, lang: str = "python", respect_
         ]
 
     # Build call graph (L2)
-    try:
-        call_graph = build_project_call_graph(str(project), language=lang)
-
-        # Build call/called_by maps
-        calls_map = {}  # func -> [called functions]
-        called_by_map = {}  # func -> [calling functions]
-
-        for edge in call_graph.edges:
-            src_file, src_func, dst_file, dst_func = edge
-
-            # Forward: src calls dst
-            if src_func not in calls_map:
-                calls_map[src_func] = []
-            calls_map[src_func].append(dst_func)
-
-            # Backward: dst is called by src
-            if dst_func not in called_by_map:
-                called_by_map[dst_func] = []
-            called_by_map[dst_func].append(src_func)
-    except Exception:
-        # Call graph may not be available for all projects
+    if skip_call_graph:
+        # Skip call graph generation for faster indexing
         calls_map = {}
         called_by_map = {}
+    else:
+        try:
+            call_graph = build_project_call_graph(str(project), language=lang)
+
+            # Build call/called_by maps
+            calls_map = {}  # func -> [called functions]
+            called_by_map = {}  # func -> [calling functions]
+
+            for edge in call_graph.edges:
+                src_file, src_func, dst_file, dst_func = edge
+
+                # Forward: src calls dst
+                if src_func not in calls_map:
+                    calls_map[src_func] = []
+                calls_map[src_func].append(dst_func)
+
+                # Backward: dst is called by src
+                if dst_func not in called_by_map:
+                    called_by_map[dst_func] = []
+                called_by_map[dst_func].append(src_func)
+        except Exception:
+            # Call graph may not be available for all projects
+            calls_map = {}
+            called_by_map = {}
 
     # Process files in parallel for better performance
     files = structure.get("files", [])
     max_workers = int(os.environ.get("TLDR_MAX_WORKERS", os.cpu_count() or 4))
+
+    # Prepend base_path to file paths to get absolute paths
+    for file_info in files:
+        file_path = file_info.get("path", "")
+        # Convert relative path to absolute path
+        if not Path(file_path).is_absolute():
+            # If file_path is relative to scan_path, make it relative to base_path
+            # But since we scanned from scan_path, we need to resolve it
+            file_info["absolute_path"] = str(base_path / file_path)
+        else:
+            file_info["absolute_path"] = file_path
 
     # Use parallel processing if we have multiple files
     if len(files) > 1 and max_workers > 1:
@@ -656,7 +725,13 @@ def _process_file_for_extraction(
     units = []
     project = Path(project_path)
     file_path = file_info.get("path", "")
-    full_path = project / file_path
+
+    # Use absolute_path if available (from base_path resolution), otherwise relative
+    absolute_file_path = file_info.get("absolute_path")
+    if absolute_file_path:
+        full_path = Path(absolute_file_path)
+    else:
+        full_path = project / file_path
 
     if not full_path.exists():
         return units
@@ -733,6 +808,122 @@ def _process_file_for_extraction(
         except Exception as e:
             logger.debug(f"AST parse failed for {file_path}: {e}")
 
+    elif lang == "php":
+        try:
+            from tree_sitter import Language, Parser
+            # Import PHP parser from cross_file_calls
+            from tldr.cross_file_calls import _get_php_parser
+
+            parser = _get_php_parser()
+            if not parser:
+                logger.warning(f"No PHP parser available for {file_path}")
+            else:
+                tree = parser.parse(bytes(content, "utf8"))
+                root_node = tree.root_node
+                logger.debug(f"Parsed {file_path} with PHP tree-sitter, root: {root_node.type}")
+
+                def find_parent_class(node):
+                    """Find parent class by walking up from method node."""
+                    current = node.parent
+                    while current and current.id != root_node.id:
+                        if current.type == "class_declaration":
+                            for child in current.children:
+                                if child.type == "name":
+                                    return content[child.start_byte:child.end_byte]
+                        current = current.parent
+                    return None
+
+                def extract_code_preview(node, func_name=None):
+                    """Extract first 10 lines from function body, or signature if abstract/interface."""
+                    # Find function body
+                    body_node = None
+                    for child in node.children:
+                        if child.type == "compound_statement":
+                            body_node = child
+                            break
+
+                    if body_node:
+                        body_start = body_node.start_point[0]
+                        body_end = min(body_node.end_point[0] + 1, body_start + 10)
+                        return '\n'.join(lines[body_start:body_end])
+
+                    # No body (interface/abstract method) - show the signature line
+                    if func_name:
+                        sig = extract_function_signature(node, func_name)
+                        return sig + ";"
+                    return ""
+
+                def extract_function_signature(node, name):
+                    """Extract function signature from PHP function node."""
+                    params = []
+                    for child in node.children:
+                        if child.type == "formal_parameters":
+                            for param in child.children:
+                                if param.type == "simple_parameter" or param.type == "variadic_parameter":
+                                    # Extract full parameter text including type hints
+                                    params.append(content[param.start_byte:param.end_byte].strip())
+                    return f"function {name}({', '.join(params)})"
+
+                def walk_tree(node):
+                    """Walk tree-sitter AST to find functions, classes, and traits."""
+                    if node.type in ("function_declaration", "method_declaration"):
+                        func_name = None
+                        for child in node.children:
+                            if child.type == "name":
+                                func_name = content[child.start_byte:child.end_byte]
+                                break
+
+                        if func_name:
+                            start_line = node.start_point[0] + 1
+                            parent_class = find_parent_class(node)
+                            code_preview = extract_code_preview(node, func_name)
+                            signature = extract_function_signature(node, func_name)
+
+                            if parent_class:
+                                key = f"{parent_class}.{func_name}"
+                                ast_info["methods"][key] = {
+                                    "line": start_line,
+                                    "code_preview": code_preview
+                                }
+                                all_signatures[key] = signature
+                                all_docstrings[key] = ""
+                            else:
+                                ast_info["functions"][func_name] = {
+                                    "line": start_line,
+                                    "code_preview": code_preview
+                                }
+                                all_signatures[func_name] = signature
+                                all_docstrings[func_name] = ""
+
+                    elif node.type == "class_declaration":
+                        class_name = None
+                        for child in node.children:
+                            if child.type == "name":
+                                class_name = content[child.start_byte:child.end_byte]
+                                break
+                        if class_name:
+                            ast_info["classes"][class_name] = {"line": node.start_point[0] + 1}
+
+                    elif node.type == "trait_declaration":
+                        # Track traits for class composition
+                        trait_name = None
+                        for child in node.children:
+                            if child.type == "name":
+                                trait_name = content[child.start_byte:child.end_byte]
+                                break
+                        if trait_name:
+                            ast_info["classes"][trait_name] = {"line": node.start_point[0] + 1, "type": "trait"}
+
+                    for child in node.children:
+                        walk_tree(child)
+
+                walk_tree(root_node)
+                logger.debug(f"PHP AST extraction for {file_path}: {len(ast_info['functions'])} functions, {len(ast_info['classes'])} classes, {len(ast_info['methods'])} methods")
+                logger.debug(f"Sample signatures: {list(all_signatures.keys())[:3]}")
+
+        except Exception as e:
+            logger.warning(f"PHP AST parse failed for {file_path}: {e}")
+
     # Get dependencies (imports) - single call
     dependencies = ""
     try:
@@ -758,7 +949,20 @@ def _process_file_for_extraction(
             from tldr.cfg_extractor import extract_typescript_cfg
             from tldr.dfg_extractor import extract_typescript_dfg
             return extract_typescript_cfg, extract_typescript_dfg
+        elif language == "php":
+            from tldr.cfg_extractor import extract_php_cfg
+            from tldr.dfg_extractor import extract_php_dfg
+            return extract_php_cfg, extract_php_dfg
         return None, None
+
+    def _get_default_signature(name: str, language: str) -> str:
+        """Get default function signature based on language."""
+        if language == "php":
+            return f"function {name}()"
+        elif language in ("typescript", "javascript"):
+            return f"function {name}(...)"
+        else:  # python and others
+            return f"def {name}(...)"
 
     cfg_extractor, dfg_extractor = _get_extractors(lang)
 
@@ -785,15 +989,32 @@ def _process_file_for_extraction(
 
     # Process functions
     for func_name in file_info.get("functions", []):
+        # Try direct lookup first (standalone functions)
         func_info = ast_info.get("functions", {}).get(func_name, {})
+
+        # If not found, try methods (PHP class methods are in functions list)
+        if not func_info:
+            # Look for any method ending with this function name
+            for method_key, method_info in ast_info.get("methods", {}).items():
+                if method_key.endswith(f".{func_name}"):
+                    func_info = method_info
+                    func_name = method_key  # Use qualified name for signature lookup
+                    break
+
+        # Get original func_name for qualified_name
+        original_name = func_name.split(".")[-1] if "." in func_name else func_name
+
+        # Determine if this is a method (has dot in qualified name)
+        is_method = "." in func_name
+
         unit = EmbeddingUnit(
-            name=func_name,
-            qualified_name=f"{file_path.replace('/', '.')}.{func_name}",
+            name=original_name,
+            qualified_name=f"{file_path.replace('/', '.')}.{original_name}",
             file=file_path,
             line=func_info.get("line", 1),
             language=lang,
-            unit_type="function",
-            signature=all_signatures.get(func_name, f"def {func_name}(...)"),
+            unit_type="method" if (lang == "php" and is_method) else "function",
+            signature=all_signatures.get(func_name, _get_default_signature(original_name, lang)),
             docstring=all_docstrings.get(func_name, ""),
             calls=calls_map.get(func_name, [])[:5],
             called_by=called_by_map.get(func_name, [])[:5],
@@ -936,6 +1157,7 @@ def build_semantic_index(
     model: Optional[str] = None,
     show_progress: bool = True,
     respect_ignore: bool = True,
+    skip_call_graph: bool = False,
 ) -> int:
     """Build and save FAISS index + metadata for a project.
 
@@ -949,6 +1171,7 @@ def build_semantic_index(
         model: Model name from SUPPORTED_MODELS or HuggingFace name.
         show_progress: Show progress spinner (default: True).
         respect_ignore: If True, respect .tldrignore patterns (default True).
+        skip_call_graph: Skip call graph generation (faster, uses empty maps).
 
     Returns:
         Number of indexed units.
@@ -998,9 +1221,9 @@ def build_semantic_index(
                 units = []
                 for lang_name in target_languages:
                     status.update(f"[bold green]Extracting {lang_name} code units...")
-                    units.extend(extract_units_from_project(str(scan_path), lang=lang_name, respect_ignore=respect_ignore, progress_callback=update_progress))
+                    units.extend(extract_units_from_project(str(scan_path), lang=lang_name, respect_ignore=respect_ignore, progress_callback=update_progress, skip_call_graph=skip_call_graph, project_root=str(project_root)))
             else:
-                units = extract_units_from_project(str(scan_path), lang=lang, respect_ignore=respect_ignore, progress_callback=update_progress)
+                units = extract_units_from_project(str(scan_path), lang=lang, respect_ignore=respect_ignore, progress_callback=update_progress, skip_call_graph=skip_call_graph, project_root=str(project_root))
             status.update(f"[bold green]Extracted {len(units)} code units")
     else:
         if lang == "all":
@@ -1009,9 +1232,9 @@ def build_semantic_index(
                 return 0
             units = []
             for lang_name in target_languages:
-                units.extend(extract_units_from_project(str(scan_path), lang=lang_name, respect_ignore=respect_ignore))
+                units.extend(extract_units_from_project(str(scan_path), lang=lang_name, respect_ignore=respect_ignore, skip_call_graph=skip_call_graph, project_root=str(project_root)))
         else:
-            units = extract_units_from_project(str(scan_path), lang=lang, respect_ignore=respect_ignore)
+            units = extract_units_from_project(str(scan_path), lang=lang, respect_ignore=respect_ignore, skip_call_graph=skip_call_graph, project_root=str(project_root))
 
     if not units:
         return 0

@@ -385,6 +385,11 @@ Semantic Search:
         default=None,
         help="Embedding model: bge-large-en-v1.5 (1.3GB, default) or all-MiniLM-L6-v2 (80MB)",
     )
+    index_p.add_argument(
+        "--skip-call-graph",
+        action="store_true",
+        help="Skip call graph generation (use if already cached, faster)",
+    )
 
     # tldr semantic search <query>
     search_p = semantic_sub.add_parser("search", help="Search semantically")
@@ -418,9 +423,20 @@ Semantic Search:
     daemon_status_p.add_argument("--project", "-p", default=".", help="Project path (default: current directory)")
 
     # tldr daemon query CMD [--project PATH]
-    daemon_query_p = daemon_sub.add_parser("query", help="Send raw JSON command to daemon")
-    daemon_query_p.add_argument("cmd", help="Command to send (e.g., ping, status, search)")
-    daemon_query_p.add_argument("--project", "-p", default=".", help="Project path (default: current directory)")
+    # or: tldr daemon query --json '{"cmd":"semantic","action":"search",...}'
+    daemon_query_p = daemon_sub.add_parser("query", help="Send command to daemon")
+    daemon_query_p.add_argument(
+        "cmd",
+        nargs="?",
+        help="Simple command name (e.g., ping, status). Ignored if --json is provided.",
+    )
+    daemon_query_p.add_argument(
+        "--json",
+        help="Raw JSON command to send (e.g., '{\"cmd\":\"semantic\",\"action\":\"search\",\"query\":\"...\"}')",
+    )
+    daemon_query_p.add_argument(
+        "--project", "-p", default=".", help="Project path (default: current directory)"
+    )
 
     # tldr daemon notify FILE [--project PATH]
     daemon_notify_p = daemon_sub.add_parser("notify", help="Notify daemon of file change (triggers reindex at threshold)")
@@ -969,7 +985,8 @@ Semantic Search:
 
             if args.action == "index":
                 respect_ignore = not getattr(args, 'no_ignore', False)
-                count = build_semantic_index(args.path, lang=args.lang, model=args.model, respect_ignore=respect_ignore)
+                skip_call_graph = getattr(args, 'skip_call_graph', False)
+                count = build_semantic_index(args.path, lang=args.lang, model=args.model, respect_ignore=respect_ignore, skip_call_graph=skip_call_graph)
                 print(f"Indexed {count} code units")
 
             elif args.action == "search":
@@ -1186,7 +1203,21 @@ Semantic Search:
 
             elif args.action == "query":
                 try:
-                    result = query_daemon(project_path, {"cmd": args.cmd})
+                    # If --json is provided, send raw JSON payload to daemon.
+                    # Otherwise, fall back to simple {"cmd": CMD} behavior.
+                    if getattr(args, "json", None):
+                        try:
+                            command = json.loads(args.json)
+                        except json.JSONDecodeError as e:
+                            print(f"Error: invalid JSON for --json: {e}", file=sys.stderr)
+                            sys.exit(1)
+                    else:
+                        if not args.cmd:
+                            print("Error: either CMD or --json must be provided", file=sys.stderr)
+                            sys.exit(1)
+                        command = {"cmd": args.cmd}
+
+                    result = query_daemon(project_path, command)
                     print(json.dumps(result, indent=2))
                 except (ConnectionRefusedError, FileNotFoundError):
                     print("Error: Daemon not running", file=sys.stderr)

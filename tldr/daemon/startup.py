@@ -228,6 +228,30 @@ def _create_client_socket(daemon: "TLDRDaemon") -> socket.socket:
     return client
 
 
+def _recv_all(sock: socket.socket) -> bytes:
+    """Receive complete response from socket until newline delimiter.
+
+    Socket recv() returns only data currently available, not the full
+    requested buffer size. This function loops until we receive the
+    newline delimiter that marks the end of the message.
+
+    Args:
+        sock: Connected socket to read from
+
+    Returns:
+        Complete response data (with newline stripped)
+    """
+    data = b""
+    while True:
+        chunk = sock.recv(4096)
+        if not chunk:
+            break
+        data += chunk
+        if b"\n" in data:
+            break
+    return data.rstrip(b"\n")
+
+
 def start_daemon(project_path: str | Path, foreground: bool = False):
     """
     Start the TLDR daemon for a project.
@@ -404,7 +428,7 @@ def stop_daemon(project_path: str | Path) -> bool:
     try:
         client = _create_client_socket(daemon)
         client.sendall(json.dumps({"cmd": "shutdown"}).encode() + b"\n")
-        response = client.recv(4096)
+        _recv_all(client)  # Consume response (we don't need the content)
         client.close()
         return True
     except (ConnectionRefusedError, FileNotFoundError, OSError):
@@ -430,7 +454,7 @@ def query_daemon(project_path: str | Path, command: dict) -> dict:
     client = _create_client_socket(daemon)
     try:
         client.sendall(json.dumps(command).encode() + b"\n")
-        response = client.recv(65536)
+        response = _recv_all(client)
         return json.loads(response.decode())
     finally:
         client.close()
