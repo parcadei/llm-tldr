@@ -75,6 +75,7 @@ from .cfg_extractor import (
     extract_scala_cfg,
     extract_swift_cfg,
     extract_typescript_cfg,
+    extract_zig_cfg,
 )
 from .dedup import ContentHashedIndex  # P5 #21: Content-hash deduplication
 from .cross_file_calls import (
@@ -132,6 +133,9 @@ from .cross_file_calls import (
     parse_elixir_imports as _parse_elixir_imports,
 )
 from .cross_file_calls import (
+    parse_zig_imports as _parse_zig_imports,
+)
+from .cross_file_calls import (
     scan_project as _scan_project,
 )
 from .dfg_extractor import (
@@ -152,6 +156,7 @@ from .dfg_extractor import (
     extract_scala_dfg,
     extract_swift_dfg,
     extract_typescript_dfg,
+    extract_zig_dfg,
 )
 from .hybrid_extractor import (
     HybridExtractor,
@@ -641,6 +646,7 @@ def get_relevant_context(
         "lua": extract_lua_cfg,
         "luau": extract_luau_cfg,
         "elixir": extract_elixir_cfg,
+        "zig": extract_zig_cfg,
     }
     cfg_extractor_fn = cfg_extractors.get(language, extract_python_cfg)
 
@@ -791,6 +797,7 @@ def get_dfg_context(
         "lua": extract_lua_dfg,
         "luau": extract_luau_dfg,
         "elixir": extract_elixir_dfg,
+        "zig": extract_zig_dfg,
     }
 
     # Default to Python for unknown languages
@@ -858,6 +865,7 @@ def get_cfg_context(
         "lua": extract_lua_cfg,
         "luau": extract_luau_cfg,
         "elixir": extract_elixir_cfg,
+        "zig": extract_zig_cfg,
     }
 
     extractor_fn = cfg_extractors.get(language, extract_python_cfg)
@@ -1156,6 +1164,8 @@ def get_imports(file_path: str, language: str = "python") -> list[dict]:
         return _parse_luau_imports(file_path)
     elif language == "elixir":
         return _parse_elixir_imports(file_path)
+    elif language == "zig":
+        return _parse_zig_imports(file_path)
     else:
         raise ValueError(f"Unsupported language: {language}")
 
@@ -1562,6 +1572,7 @@ def get_code_structure(
         "elixir": {".ex", ".exs"},
         "lua": {".lua"},
         "luau": {".luau"},
+        "zig": {".zig"},
     }
 
     extensions = ext_map.get(language, {".py"})

@@ -128,6 +128,13 @@ try:
 except ImportError:
     pass
 
+TREE_SITTER_ZIG_AVAILABLE = False
+try:
+    import tree_sitter_zig
+    TREE_SITTER_ZIG_AVAILABLE = True
+except ImportError:
+    pass
+
 
 @dataclass
 class EditRange:
@@ -339,6 +346,7 @@ class TreeCache:
             ".py": "python",
             ".go": "go",
             ".rs": "rust",
+            ".zig": "zig",
         }
         return lang_map.get(suffix, "unknown")
 
@@ -497,6 +505,11 @@ def _get_parser(language: str) -> Optional[Any]:
             parser.language = Language(tree_sitter_elixir.language())
         else:
             return None
+    elif language == "zig":
+        if TREE_SITTER_ZIG_AVAILABLE:
+            parser.language = Language(tree_sitter_zig.language())
+        else:
+            return None
     else:
         return None
 
@@ -512,7 +525,7 @@ class IncrementalParser:
     SUPPORTED_LANGUAGES = {
         "typescript", "tsx", "javascript", "python", "go", "rust",
         "lua", "luau", "java", "c", "cpp", "ruby", "php", "csharp",
-        "kotlin", "scala", "elixir"
+        "kotlin", "scala", "elixir", "zig"
     }
 
     def __init__(self, cache_dir: Optional[Path] = None):

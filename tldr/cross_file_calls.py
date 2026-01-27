@@ -18,7 +18,11 @@ import ast
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Iterator, Optional
+from collections.abc import Iterator
+from typing import TYPE_CHECKING, Optional
+
+if TYPE_CHECKING:
+    from tree_sitter import Node, Parser
 
 from tldr.workspace import WorkspaceConfig, load_workspace_config, filter_paths
 
@@ -130,6 +134,14 @@ TREE_SITTER_ELIXIR_AVAILABLE = False
 try:
     import tree_sitter_elixir
     TREE_SITTER_ELIXIR_AVAILABLE = True
+except ImportError:
+    pass
+
+# Tree-sitter support for Zig
+TREE_SITTER_ZIG_AVAILABLE = False
+try:
+    import tree_sitter_zig
+    TREE_SITTER_ZIG_AVAILABLE = True
 except ImportError:
     pass
 
@@ -335,6 +347,8 @@ def scan_project(
         extensions = {'.luau'}
     elif language == "elixir":
         extensions = {'.ex', '.exs'}
+    elif language == "zig":
+        extensions = {'.zig'}
     else:
         raise ValueError(f"Unsupported language: {language}")
 
@@ -1555,6 +1569,100 @@ def _parse_elixir_import_node(node, source: bytes) -> dict | None:
         result['as'] = alias_name
 
     return result
+
+
+def parse_zig_imports(file_path: str | Path) -> list[dict]:
+    if not TREE_SITTER_ZIG_AVAILABLE:
+        return []
+
+    file_path = Path(file_path)
+    try:
+        source = file_path.read_bytes()
+    except FileNotFoundError:
+        return []
+
+    parser = _get_zig_parser()
+    tree = parser.parse(source)
+
+    imports = []
+
+    def walk_tree(node):
+        if node.type == "variable_declaration":
+            _parse_zig_import_decl(node, source, imports)
+        elif node.type == "usingnamespace_expression":
+            _parse_zig_usingnamespace(node, source, imports)
+        for child in node.children:
+            walk_tree(child)
+
+    walk_tree(tree.root_node)
+    return imports
+
+
+def _get_zig_parser() -> "Parser":
+    from tree_sitter import Language, Parser
+    parser = Parser()
+    parser.language = Language(tree_sitter_zig.language())
+    return parser
+
+
+def _find_zig_import_node(node: "Node", source: bytes) -> "Optional[Node]":
+    if node.type in ("builtin_call_expression", "call_expression"):
+        text = source[node.start_byte:node.end_byte].decode("utf-8")
+        if text.startswith("@import"):
+            return node
+    for child in node.children:
+        result = _find_zig_import_node(child, source)
+        if result:
+            return result
+    return None
+
+
+def _extract_module_from_import(import_node: "Node", source: bytes) -> Optional[str]:
+    import_text = source[import_node.start_byte:import_node.end_byte].decode("utf-8")
+    if '"' in import_text:
+        start = import_text.index('"') + 1
+        end = import_text.rindex('"')
+        return import_text[start:end]
+    return None
+
+
+def _parse_zig_import_decl(node: "Node", source: bytes, imports: list) -> None:
+    import_node = _find_zig_import_node(node, source)
+    if not import_node:
+        return
+
+    var_name = None
+    for child in node.children:
+        if child.type == "identifier":
+            var_name = source[child.start_byte:child.end_byte].decode("utf-8")
+            break
+
+    module = _extract_module_from_import(import_node, source)
+    if module:
+        imports.append({
+            'module': module,
+            'names': [var_name] if var_name else [],
+            'is_from': False,
+            'alias': var_name,
+        })
+
+
+def _extract_zig_import_module(node: "Node", source: bytes) -> Optional[str]:
+    import_node = _find_zig_import_node(node, source)
+    if not import_node:
+        return None
+    return _extract_module_from_import(import_node, source)
+
+
+def _parse_zig_usingnamespace(node: "Node", source: bytes, imports: list) -> None:
+    module = _extract_zig_import_module(node, source)
+    if module:
+        imports.append({
+            'module': module,
+            'names': [],
+            'is_from': False,
+            'alias': None,
+        })
 
 
 def parse_php_imports(file_path: str | Path) -> list[dict]:

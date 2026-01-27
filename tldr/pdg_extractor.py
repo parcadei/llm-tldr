@@ -931,6 +931,42 @@ def extract_elixir_pdg(source_code: str, function_name: str) -> PDGInfo | None:
 
 
 # =============================================================================
+# Zig PDG Extraction
+# =============================================================================
+
+
+def extract_zig_pdg(source_code: str, function_name: str) -> PDGInfo | None:
+    """Extract Program Dependence Graph for a Zig function.
+
+    Uses extract_zig_cfg and extract_zig_dfg to build a combined PDG
+    via PDGBuilder. Exceptions are handled internally.
+
+    Args:
+        source_code: Zig source code as a string.
+        function_name: Name of the function to analyze.
+
+    Returns:
+        PDGInfo on success, None if extraction fails or dependencies are missing.
+    """
+    try:
+        from .cfg_extractor import extract_zig_cfg
+        from .dfg_extractor import extract_zig_dfg
+
+        cfg = extract_zig_cfg(source_code, function_name)
+        if cfg is None:
+            return None
+
+        dfg = extract_zig_dfg(source_code, function_name)
+        if dfg is None:
+            return None
+
+        builder = PDGBuilder(cfg, dfg)
+        return builder.build()
+    except (ValueError, ImportError):
+        return None
+
+
+# =============================================================================
 # Multi-language convenience function
 # =============================================================================
 
@@ -965,6 +1001,7 @@ def extract_pdg(source_code: str, function_name: str, language: str) -> PDGInfo 
         "lua": extract_lua_pdg,
         "luau": extract_luau_pdg,
         "elixir": extract_elixir_pdg,
+        "zig": extract_zig_pdg,
     }
 
     extractor = extractors.get(language.lower())

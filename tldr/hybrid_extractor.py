@@ -14,10 +14,13 @@ import json
 import logging
 import os
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any, ClassVar
 
 from .ast_extractor import extract_python, ModuleInfo, FunctionInfo, ClassInfo, ImportInfo, CallGraphInfo
 from .signature_extractor_pygments import SignatureExtractor
+
+if TYPE_CHECKING:
+    from tree_sitter import Parser
 
 logger = logging.getLogger(__name__)
 
@@ -157,6 +160,14 @@ try:
 except ImportError:
     pass
 
+TREE_SITTER_ZIG_AVAILABLE = False
+try:
+    from tree_sitter import Language, Parser
+    import tree_sitter_zig
+    TREE_SITTER_ZIG_AVAILABLE = True
+except ImportError:
+    pass
+
 
 class HybridExtractor:
     """
@@ -184,10 +195,11 @@ class HybridExtractor:
     LUA_EXTENSIONS = {".lua"}
     LUAU_EXTENSIONS = {".luau"}
     ELIXIR_EXTENSIONS = {".ex", ".exs"}
+    ZIG_EXTENSIONS: ClassVar[set[str]] = {".zig"}
 
-    def __init__(self):
+    def __init__(self) -> None:
         self._pygments_extractor = SignatureExtractor()
-        self._ts_parsers: dict[str, Any] = {}
+        self._ts_parsers: dict[str, "Parser"] = {}
 
     def _safe_decode(self, data: bytes) -> str:
         """Safely decode bytes to string, replacing invalid UTF-8.
@@ -221,7 +233,7 @@ class HybridExtractor:
             if file_size > MAX_FILE_SIZE:
                 raise FileTooLargeError(file_path, file_size, MAX_FILE_SIZE)
         except OSError as e:
-            logger.warning(f"Could not stat file {file_path}: {e}")
+            logger.warning("Could not stat file %s: %s", file_path, e)
             # Continue anyway - let the actual read fail if there's a problem
 
         suffix = file_path.suffix.lower()
@@ -236,7 +248,7 @@ class HybridExtractor:
                 result = self._try_tree_sitter(lambda fp: self._extract_tree_sitter(fp, suffix), file_path, "typescript")
                 if result:
                     return result
-            logger.debug(f"Tree-sitter not available or failed, using Pygments for {suffix}")
+            logger.debug("Tree-sitter not available or failed, using Pygments for %s", suffix)
 
         # Go - use tree-sitter-go if available
         if suffix in self.GO_EXTENSIONS:
@@ -244,7 +256,7 @@ class HybridExtractor:
                 result = self._try_tree_sitter(self._extract_go, file_path, "go")
                 if result:
                     return result
-            logger.debug(f"Tree-sitter-go not available or failed, using Pygments for {suffix}")
+            logger.debug("Tree-sitter-go not available or failed, using Pygments for %s", suffix)
 
         # Rust - use tree-sitter-rust if available
         if suffix in self.RUST_EXTENSIONS:
@@ -252,7 +264,7 @@ class HybridExtractor:
                 result = self._try_tree_sitter(self._extract_rust, file_path, "rust")
                 if result:
                     return result
-            logger.debug(f"Tree-sitter-rust not available or failed, using Pygments for {suffix}")
+            logger.debug("Tree-sitter-rust not available or failed, using Pygments for %s", suffix)
 
         # Java - use tree-sitter-java if available
         if suffix in self.JAVA_EXTENSIONS:
@@ -260,7 +272,7 @@ class HybridExtractor:
                 result = self._try_tree_sitter(self._extract_java, file_path, "java")
                 if result:
                     return result
-            logger.debug(f"Tree-sitter-java not available or failed, using Pygments for {suffix}")
+            logger.debug("Tree-sitter-java not available or failed, using Pygments for %s", suffix)
 
         # C - use tree-sitter-c if available
         if suffix in self.C_EXTENSIONS:
@@ -268,7 +280,7 @@ class HybridExtractor:
                 result = self._try_tree_sitter(self._extract_c, file_path, "c")
                 if result:
                     return result
-            logger.debug(f"Tree-sitter-c not available or failed, using Pygments for {suffix}")
+            logger.debug("Tree-sitter-c not available or failed, using Pygments for %s", suffix)
 
         # C++ - use tree-sitter-cpp if available
         if suffix in self.CPP_EXTENSIONS:
@@ -276,7 +288,7 @@ class HybridExtractor:
                 result = self._try_tree_sitter(self._extract_cpp, file_path, "cpp")
                 if result:
                     return result
-            logger.debug(f"Tree-sitter-cpp not available or failed, using Pygments for {suffix}")
+            logger.debug("Tree-sitter-cpp not available or failed, using Pygments for %s", suffix)
 
         # Ruby - use tree-sitter-ruby if available
         if suffix in self.RUBY_EXTENSIONS:
@@ -284,7 +296,7 @@ class HybridExtractor:
                 result = self._try_tree_sitter(self._extract_ruby, file_path, "ruby")
                 if result:
                     return result
-            logger.debug(f"Tree-sitter-ruby not available or failed, using Pygments for {suffix}")
+            logger.debug("Tree-sitter-ruby not available or failed, using Pygments for %s", suffix)
 
         # Kotlin - use tree-sitter-kotlin if available
         if suffix in self.KOTLIN_EXTENSIONS:
@@ -292,7 +304,7 @@ class HybridExtractor:
                 result = self._try_tree_sitter(self._extract_kotlin, file_path, "kotlin")
                 if result:
                     return result
-            logger.debug(f"Tree-sitter-kotlin not available or failed, using Pygments for {suffix}")
+            logger.debug("Tree-sitter-kotlin not available or failed, using Pygments for %s", suffix)
 
         # Swift - use tree-sitter-swift if available
         if suffix in self.SWIFT_EXTENSIONS:
@@ -300,7 +312,7 @@ class HybridExtractor:
                 result = self._try_tree_sitter(self._extract_swift, file_path, "swift")
                 if result:
                     return result
-            logger.debug(f"Tree-sitter-swift not available or failed, using Pygments for {suffix}")
+            logger.debug("Tree-sitter-swift not available or failed, using Pygments for %s", suffix)
 
         # C# - use tree-sitter-c-sharp if available
         if suffix in self.CSHARP_EXTENSIONS:
@@ -308,7 +320,7 @@ class HybridExtractor:
                 result = self._try_tree_sitter(self._extract_csharp, file_path, "csharp")
                 if result:
                     return result
-            logger.debug(f"Tree-sitter-c-sharp not available or failed, using Pygments for {suffix}")
+            logger.debug("Tree-sitter-c-sharp not available or failed, using Pygments for %s", suffix)
 
         # Scala - use tree-sitter-scala if available
         if suffix in self.SCALA_EXTENSIONS:
@@ -316,7 +328,7 @@ class HybridExtractor:
                 result = self._try_tree_sitter(self._extract_scala, file_path, "scala")
                 if result:
                     return result
-            logger.debug(f"Tree-sitter-scala not available or failed, using Pygments for {suffix}")
+            logger.debug("Tree-sitter-scala not available or failed, using Pygments for %s", suffix)
 
         # Lua - use tree-sitter-lua if available
         if suffix in self.LUA_EXTENSIONS:
@@ -324,7 +336,7 @@ class HybridExtractor:
                 result = self._try_tree_sitter(self._extract_lua, file_path, "lua")
                 if result:
                     return result
-            logger.debug(f"Tree-sitter-lua not available or failed, using Pygments for {suffix}")
+            logger.debug("Tree-sitter-lua not available or failed, using Pygments for %s", suffix)
 
         # Luau - use tree-sitter-luau if available
         if suffix in self.LUAU_EXTENSIONS:
@@ -332,7 +344,7 @@ class HybridExtractor:
                 result = self._try_tree_sitter(self._extract_luau, file_path, "luau")
                 if result:
                     return result
-            logger.debug(f"Tree-sitter-luau not available or failed, using Pygments for {suffix}")
+            logger.debug("Tree-sitter-luau not available or failed, using Pygments for %s", suffix)
 
         # Elixir - use tree-sitter-elixir if available
         if suffix in self.ELIXIR_EXTENSIONS:
@@ -340,7 +352,15 @@ class HybridExtractor:
                 result = self._try_tree_sitter(self._extract_elixir, file_path, "elixir")
                 if result:
                     return result
-            logger.debug(f"Tree-sitter-elixir not available or failed, using Pygments for {suffix}")
+            logger.debug("Tree-sitter-elixir not available or failed, using Pygments for %s", suffix)
+
+        # Zig - use tree-sitter-zig if available
+        if suffix in self.ZIG_EXTENSIONS:
+            if TREE_SITTER_ZIG_AVAILABLE:
+                result = self._try_tree_sitter(self._extract_zig, file_path, "zig")
+                if result:
+                    return result
+            logger.debug("Tree-sitter-zig not available or failed, using Pygments for %s", suffix)
 
         # Fallback to Pygments
         return self._extract_pygments(file_path)
@@ -351,7 +371,7 @@ class HybridExtractor:
             signatures_text = self._pygments_extractor.get_signatures(str(file_path))
             signatures = self._parse_signatures(signatures_text)
         except Exception as e:
-            logger.warning(f"Pygments extraction failed for {file_path}: {e}")
+            logger.warning("Pygments extraction failed for %s: %s", file_path, e)
             signatures = []
 
         # Convert to ModuleInfo format
@@ -449,19 +469,19 @@ class HybridExtractor:
         try:
             return parser.parse(source)
         except Exception as e:
-            logger.error(f"Tree-sitter parse failed for {file_path} ({language}): {e}")
-            raise ParseError(file_path, language, e)
+            logger.error("Tree-sitter parse failed for %s (%s): %s", file_path, language, e)
+            raise ParseError(file_path, language, e) from e
 
     def _try_tree_sitter(self, extractor_method, file_path: Path, language: str) -> ModuleInfo | None:
         """Try tree-sitter extraction, return None on failure to allow Pygments fallback."""
         try:
             return extractor_method(file_path)
         except (ParseError, OSError, ValueError, RuntimeError) as e:
-            logger.warning(f"Tree-sitter extraction failed for {file_path} ({language}), falling back to Pygments: {e}")
+            logger.warning("Tree-sitter extraction failed for %s (%s), falling back to Pygments: %s", file_path, language, e)
             return None
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             # Catch-all for unexpected errors (corrupted grammars, etc.)
-            logger.warning(f"Unexpected error during tree-sitter extraction for {file_path} ({language}): {e}")
+            logger.warning("Unexpected error during tree-sitter extraction for %s (%s): %s", file_path, language, e)
             return None
 
     def _extract_ts_nodes(self, node, source: bytes, module_info: ModuleInfo, defined_names: set[str] | None = None):
@@ -3151,6 +3171,154 @@ class HybridExtractor:
             line_number=node.start_point[0] + 1,
         )
 
+    # === Zig Extraction ===
+
+    def _extract_zig(self, file_path: Path) -> ModuleInfo:
+        with open(file_path, "rb") as f:
+            source = f.read()
+
+        parser = self._get_zig_parser()
+        tree = self._safe_parse(parser, source, file_path, "zig")
+
+        module_info = ModuleInfo(
+            file_path=str(file_path),
+            language="zig",
+            docstring=None,
+        )
+
+        self._extract_zig_nodes(tree.root_node, source, module_info)
+        return module_info
+
+    def _get_zig_parser(self) -> "Parser":
+        if "zig" not in self._ts_parsers:
+            zig_lang = Language(tree_sitter_zig.language())
+            parser = Parser(zig_lang)
+            self._ts_parsers["zig"] = parser
+        return self._ts_parsers["zig"]
+
+    def _extract_zig_nodes(self, node, source: bytes, module_info: ModuleInfo, *, in_type: bool = False) -> None:
+        for child in node.children:
+            if child.type == "function_declaration":
+                if not in_type:
+                    func_info = self._extract_zig_function(child, source)
+                    if func_info:
+                        module_info.functions.append(func_info)
+            elif child.type == "test_declaration":
+                func_info = self._extract_zig_test(child, source)
+                if func_info:
+                    module_info.functions.append(func_info)
+            elif child.type == "variable_declaration":
+                class_info = self._extract_zig_type_decl(child, source)
+                if class_info:
+                    module_info.classes.append(class_info)
+                else:
+                    import_info = self._extract_zig_import(child, source)
+                    if import_info:
+                        module_info.imports.append(import_info)
+            for grandchild in child.children:
+                if grandchild.type in ("struct_declaration", "enum_declaration", "union_declaration"):
+                    self._extract_zig_nodes(grandchild, source, module_info, in_type=True)
+
+    def _extract_zig_function(self, node, source: bytes) -> FunctionInfo | None:
+        name = None
+        params = []
+        return_type = None
+
+        for child in node.children:
+            if child.type == "identifier":
+                name = self._safe_decode(source[child.start_byte:child.end_byte])
+            elif child.type == "parameters":
+                for param in child.children:
+                    if param.type == "parameter":
+                        param_name = None
+                        for pc in param.children:
+                            if pc.type == "identifier":
+                                param_name = self._safe_decode(source[pc.start_byte:pc.end_byte])
+                                break
+                        if param_name:
+                            params.append(param_name)
+            elif child.type in ("type_expression", "primary_type_expression"):
+                return_type = self._safe_decode(source[child.start_byte:child.end_byte])
+
+        if not name:
+            return None
+
+        return FunctionInfo(
+            name=name,
+            params=params,
+            return_type=return_type,
+            docstring=None,
+            line_number=node.start_point[0] + 1,
+        )
+
+    def _extract_zig_test(self, node, source: bytes) -> FunctionInfo:
+        name = "test"
+        for child in node.children:
+            if child.type == "string":
+                name = self._safe_decode(source[child.start_byte:child.end_byte]).strip('"')
+                break
+
+        return FunctionInfo(
+            name=f"test_{name}",
+            params=[],
+            return_type=None,
+            docstring=None,
+            line_number=node.start_point[0] + 1,
+        )
+
+    def _extract_zig_type_decl(self, node, source: bytes) -> ClassInfo | None:
+        name = None
+        type_kind = None
+
+        for child in node.children:
+            if child.type == "identifier":
+                name = self._safe_decode(source[child.start_byte:child.end_byte])
+            elif child.type in ("struct_declaration", "enum_declaration", "union_declaration"):
+                type_kind = child.type.replace("_declaration", "")
+
+        if not name or not type_kind:
+            return None
+
+        methods = []
+        for child in node.children:
+            if child.type in ("struct_declaration", "enum_declaration", "union_declaration"):
+                for member in child.children:
+                    if member.type == "function_declaration":
+                        func = self._extract_zig_function(member, source)
+                        if func:
+                            func.is_method = True
+                            methods.append(func)
+
+        return ClassInfo(
+            name=name,
+            methods=methods,
+            bases=[],
+            docstring=None,
+            line_number=node.start_point[0] + 1,
+        )
+
+    def _extract_zig_import(self, node, source: bytes) -> ImportInfo | None:
+        var_name = None
+        module = None
+
+        for child in node.children:
+            if child.type == "identifier":
+                var_name = self._safe_decode(source[child.start_byte:child.end_byte])
+
+        text = self._safe_decode(source[node.start_byte:node.end_byte])
+        if "@import" in text and '"' in text:
+            start = text.index('"') + 1
+            end = text.rindex('"')
+            module = text[start:end]
+
+        if module:
+            return ImportInfo(
+                module=module,
+                names=[var_name] if var_name else [],
+                is_from=False,
+            )
+        return None
+
     def _parse_signatures(self, text: str) -> list[str]:
         """Parse Pygments signature output."""
         if not text or not text.strip():
@@ -3186,6 +3354,7 @@ class HybridExtractor:
             ".scala": "scala", ".sc": "scala",
             ".lua": "lua", ".luau": "luau",
             ".ex": "elixir", ".exs": "elixir",
+            ".zig": "zig",
             ".php": "php",
         }
         return ext_map.get(file_path.suffix.lower(), "unknown")
@@ -3214,6 +3383,7 @@ def extract_directory(
         extensions = (
             HybridExtractor.PYTHON_EXTENSIONS |
             HybridExtractor.TREE_SITTER_EXTENSIONS |
+            HybridExtractor.ZIG_EXTENSIONS |
             {".go", ".rs", ".rb", ".java", ".kt", ".c", ".cpp", ".h", ".hpp", ".cs", ".swift", ".scala", ".sc"}
         )
 
@@ -3235,7 +3405,7 @@ def extract_directory(
             module_info = extractor.extract(file_path)
             results["files"].append(module_info.to_compact())
         except Exception as e:
-            logger.warning(f"Failed to extract {file_path}: {e}")
+            logger.warning("Failed to extract %s: %s", file_path, e)
 
     return results
 
@@ -3287,7 +3457,7 @@ if __name__ == "__main__":
 
                     cfg_results.append(cfg.to_dict())
                 except Exception as e:
-                    logger.debug(f"CFG extraction failed for {func.name}: {e}")
+                    logger.debug("CFG extraction failed for %s: %s", func.name, e)
 
             output = {
                 "file": str(target),
