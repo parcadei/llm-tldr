@@ -23,7 +23,7 @@ from typing import List, Optional, Tuple, Dict, Any
 
 logger = logging.getLogger("tldr.semantic")
 
-ALL_LANGUAGES = ["python", "typescript", "javascript", "go", "rust", "java", "c", "cpp", "ruby", "php", "kotlin", "swift", "csharp", "scala", "lua", "luau", "elixir"]
+ALL_LANGUAGES = ["python", "typescript", "javascript", "go", "rust", "java", "c", "cpp", "ruby", "php", "kotlin", "swift", "csharp", "scala", "lua", "luau", "elixir", "zig"]
 
 # Lazy imports for heavy dependencies
 _model = None
@@ -516,6 +516,7 @@ def _get_cfg_summary(file_path: Path, func_name: str, lang: str) -> str:
             "lua": cfg_extractor.extract_lua_cfg,
             "luau": cfg_extractor.extract_luau_cfg,
             "elixir": cfg_extractor.extract_elixir_cfg,
+            "zig": cfg_extractor.extract_zig_cfg,
         }
 
         extractor = extractor_map.get(lang)
@@ -557,6 +558,7 @@ def _get_dfg_summary(file_path: Path, func_name: str, lang: str) -> str:
             "lua": dfg_extractor.extract_lua_dfg,
             "luau": dfg_extractor.extract_luau_dfg,
             "elixir": dfg_extractor.extract_elixir_dfg,
+            "zig": dfg_extractor.extract_zig_dfg,
         }
 
         extractor = extractor_map.get(lang)
@@ -906,6 +908,7 @@ def _detect_project_languages(project_path: Path, respect_ignore: bool = True) -
         '.luau': 'luau',
         '.ex': 'elixir',
         '.exs': 'elixir',
+        '.zig': 'zig',
     }
 
     found_languages = set()

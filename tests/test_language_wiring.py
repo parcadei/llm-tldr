@@ -34,6 +34,7 @@ SUPPORTED_LANGUAGES = {
     "lua": [".lua"],
     "luau": [".luau"],
     "elixir": [".ex", ".exs"],
+    "zig": [".zig"],
 }
 
 # Languages with tree-sitter support in incremental_parse.py
@@ -41,7 +42,7 @@ SUPPORTED_LANGUAGES = {
 INCREMENTAL_PARSE_LANGUAGES = {
     "python", "typescript", "tsx", "javascript", "go", "rust",
     "lua", "luau", "java", "c", "cpp", "ruby", "php", "csharp",
-    "kotlin", "scala", "elixir"
+    "kotlin", "scala", "elixir", "zig"
 }
 
 
@@ -151,7 +152,7 @@ class TestCFGExtractors:
     CFG_LANGUAGES = [
         "python", "typescript", "go", "rust", "java",
         "c", "cpp", "ruby", "php", "kotlin", "swift", "csharp",
-        "scala", "lua", "luau", "elixir"
+        "scala", "lua", "luau", "elixir", "zig"
     ]
 
     @pytest.mark.parametrize("language", CFG_LANGUAGES)
@@ -185,7 +186,7 @@ class TestDFGExtractors:
     DFG_LANGUAGES = [
         "python", "typescript", "go", "rust", "java",
         "c", "cpp", "ruby", "php", "kotlin", "swift", "csharp",
-        "scala", "lua", "luau", "elixir"
+        "scala", "lua", "luau", "elixir", "zig"
     ]
 
     @pytest.mark.parametrize("language", DFG_LANGUAGES)
@@ -206,7 +207,7 @@ class TestPDGExtractors:
     PDG_LANGUAGES = [
         "python", "typescript", "go", "rust", "java",
         "c", "cpp", "ruby", "php", "kotlin", "swift", "csharp",
-        "scala", "lua", "luau", "elixir"
+        "scala", "lua", "luau", "elixir", "zig"
     ]
 
     @pytest.mark.parametrize("language", PDG_LANGUAGES)
@@ -284,6 +285,7 @@ class TestTreeSitterGrammars:
         "lua": "tree_sitter_lua",
         "luau": "tree_sitter_luau",
         "elixir": "tree_sitter_elixir",
+        "zig": "tree_sitter_zig",
     }
 
     @pytest.mark.parametrize("language,module", GRAMMAR_MODULES.items())

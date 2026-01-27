@@ -16,7 +16,7 @@ Uses reaching definitions analysis on CFG to build def-use chains.
 """
 import ast
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Optional
 
 
 @dataclass
@@ -706,6 +706,13 @@ TREE_SITTER_ELIXIR_AVAILABLE = False
 try:
     import tree_sitter_elixir
     TREE_SITTER_ELIXIR_AVAILABLE = True
+except ImportError:
+    pass
+
+TREE_SITTER_ZIG_AVAILABLE = False
+try:
+    import tree_sitter_zig
+    TREE_SITTER_ZIG_AVAILABLE = True
 except ImportError:
     pass
 
@@ -3732,6 +3739,179 @@ def extract_luau_dfg(code: str, function_name: str) -> DFGInfo:
     # Compute def-use chains
     analyzer = PythonReachingDefsAnalyzer(visitor.refs)
     edges = analyzer.compute_def_use_chains()
+
+    return DFGInfo(
+        function_name=function_name,
+        var_refs=visitor.refs,
+        dataflow_edges=edges,
+    )
+
+
+# =============================================================================
+# Zig DFG Extraction
+# =============================================================================
+
+class ZigDefUseVisitor:
+
+    ZIG_KEYWORDS = frozenset({
+        "fn", "return", "if", "else", "while", "for", "switch",
+        "break", "continue", "const", "var", "pub", "extern",
+        "struct", "enum", "union", "error", "try", "catch",
+        "defer", "errdefer", "unreachable", "undefined", "null",
+        "true", "false", "comptime", "inline", "noalias",
+        "threadlocal", "volatile", "test", "orelse", "and", "or",
+    })
+
+    def __init__(self, source: bytes) -> None:
+        self.source = source
+        self.refs: list[VarRef] = []
+
+    def get_node_text(self, node) -> str:
+        return self.source[node.start_byte:node.end_byte].decode('utf-8')
+
+    def visit(self, node) -> None:
+        self._visit_node(node)
+
+    def _add_ref(self, name: str, ref_type: str, node) -> None:
+        self.refs.append(VarRef(
+            name=name,
+            ref_type=ref_type,
+            line=node.start_point[0] + 1,
+            column=node.start_point[1],
+        ))
+
+    def _visit_node(self, node) -> None:
+        node_type = node.type
+
+        if node_type == "variable_declaration":
+            self._handle_var_decl(node)
+            return
+
+        if node_type == "assignment_expression":
+            self._handle_assignment(node)
+            return
+
+        if node_type == "payload":
+            for child in node.children:
+                if child.type == "identifier":
+                    name = self.get_node_text(child)
+                    if self._is_valid_var_name(name):
+                        self._add_ref(name, "definition", child)
+            return
+
+        if node_type == "identifier":
+            parent = node.parent
+            if parent and parent.type not in ("variable_declaration", "parameter", "function_declaration", "payload"):
+                name = self.get_node_text(node)
+                if self._is_valid_var_name(name):
+                    self._add_ref(name, "use", node)
+            return
+
+        if node_type == "parameter":
+            for child in node.children:
+                if child.type == "identifier":
+                    name = self.get_node_text(child)
+                    if self._is_valid_var_name(name):
+                        self._add_ref(name, "definition", child)
+            return
+
+        for child in node.children:
+            self._visit_node(child)
+
+    def _is_valid_var_name(self, name: str) -> bool:
+        return bool(name) and name not in self.ZIG_KEYWORDS and not name.startswith("@")
+
+    def _handle_var_decl(self, node) -> None:
+        for child in node.children:
+            if child.type not in ("identifier", "const", "var", "type_expression", "primary_type_expression"):
+                self._visit_node(child)
+
+        for child in node.children:
+            if child.type == "identifier":
+                name = self.get_node_text(child)
+                if self._is_valid_var_name(name):
+                    self._add_ref(name, "definition", child)
+                break
+
+    def _handle_assignment(self, node) -> None:
+        children = [c for c in node.children if c.is_named]
+        if len(children) >= 2:
+            self._visit_node(children[-1])
+            left = children[0]
+
+            is_augmented = False
+            for child in node.children:
+                if not child.is_named:
+                    op_text = self.source[child.start_byte:child.end_byte].decode('utf-8')
+                    if op_text in ("+=", "-=", "*=", "/=", "%=", "&=", "|=", "^=", "<<=", ">>="):
+                        is_augmented = True
+                        break
+
+            if left.type == "identifier":
+                name = self.get_node_text(left)
+                if self._is_valid_var_name(name):
+                    if is_augmented:
+                        self._add_ref(name, "use", left)
+                        self._add_ref(name, "update", left)
+                    else:
+                        self._add_ref(name, "definition", left)
+            else:
+                self._visit_node(left)
+
+
+def _find_zig_function_by_name(root: Any, name: str, source: bytes) -> Optional[Any]:
+    def search(node: Any) -> Optional[Any]:
+        if node.type in ("function_declaration", "test_declaration"):
+            for child in node.children:
+                if child.type == "identifier":
+                    func_name = source[child.start_byte:child.end_byte].decode('utf-8')
+                    if func_name == name:
+                        return node
+                    break
+        for child in node.children:
+            result = search(child)
+            if result:
+                return result
+        return None
+
+    return search(root)
+
+
+def extract_zig_dfg(code: str, function_name: str) -> DFGInfo:
+    if not TREE_SITTER_ZIG_AVAILABLE:
+        return DFGInfo(
+            function_name=function_name,
+            var_refs=[],
+            dataflow_edges=[],
+        )
+
+    from tree_sitter import Language, Parser
+    zig_lang = Language(tree_sitter_zig.language())
+    parser = Parser(zig_lang)
+    source_bytes = code.encode('utf-8')
+    tree = parser.parse(source_bytes)
+
+    func_node = _find_zig_function_by_name(tree.root_node, function_name, source_bytes)
+    if func_node is None:
+        return DFGInfo(
+            function_name=function_name,
+            var_refs=[],
+            dataflow_edges=[],
+        )
+
+    visitor = ZigDefUseVisitor(source_bytes)
+    visitor.visit(func_node)
+
+    latest_def: dict[str, VarRef] = {}
+    edges: list[DataflowEdge] = []
+
+    for ref in visitor.refs:
+        if ref.ref_type == "use":
+            def_ref = latest_def.get(ref.name)
+            if def_ref:
+                edges.append(DataflowEdge(def_ref=def_ref, use_ref=ref))
+        if ref.ref_type in ("definition", "update"):
+            latest_def[ref.name] = ref
 
     return DFGInfo(
         function_name=function_name,

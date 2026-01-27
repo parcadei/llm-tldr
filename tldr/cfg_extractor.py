@@ -108,6 +108,13 @@ try:
 except ImportError:
     pass
 
+TREE_SITTER_ZIG_AVAILABLE = False
+try:
+    import tree_sitter_zig
+    TREE_SITTER_ZIG_AVAILABLE = True
+except ImportError:
+    pass
+
 TREE_SITTER_LUA_AVAILABLE = False
 try:
     import tree_sitter_lua
@@ -1309,6 +1316,11 @@ def _get_ts_parser(language: str):
             raise ImportError("tree-sitter-luau not available")
         import tree_sitter_luau
         parser.language = Language(tree_sitter_luau.language())
+    elif language == "zig":
+        if not TREE_SITTER_ZIG_AVAILABLE:
+            raise ImportError("tree-sitter-zig not available")
+        import tree_sitter_zig
+        parser.language = Language(tree_sitter_zig.language())
     else:
         raise ValueError(f"Unsupported language: {language}")
 
@@ -2196,4 +2208,310 @@ def extract_elixir_cfg(source: str, function_name: str) -> CFGInfo:
         raise ValueError(f"Function '{function_name}' not found in source")
 
     builder = ElixirCFGBuilder(source_bytes)
+    return builder.build(func_node, function_name)
+
+
+class ZigCFGBuilder:
+    """Build a control-flow graph from Zig source bytes.
+
+    Maintains blocks, edges, entry/exit block IDs, loop guard and
+    after-loop stacks, and a decision_points counter used to compute
+    cyclomatic complexity.
+    """
+
+    def __init__(self, source: bytes):
+        self.source = source
+        self.blocks: list[CFGBlock] = []
+        self.edges: list[CFGEdge] = []
+        self.current_block_id = 0
+        self.current_block: CFGBlock | None = None
+        self.entry_block_id: int | None = None
+        self.exit_block_ids: list[int] = []
+        self.loop_guard_stack: list[int] = []
+        self.after_loop_stack: list[int] = []
+        self.decision_points: int = 0
+
+    def new_block(self, block_type: str, start_line: int, end_line: int | None = None) -> CFGBlock:
+        block = CFGBlock(
+            id=self.current_block_id,
+            start_line=start_line,
+            end_line=end_line or start_line,
+            block_type=block_type,
+        )
+        self.blocks.append(block)
+        self.current_block_id += 1
+        return block
+
+    def add_edge(self, source_id: int, target_id: int, edge_type: str, condition: str | None = None):
+        edge = CFGEdge(
+            source_id=source_id,
+            target_id=target_id,
+            edge_type=edge_type,
+            condition=condition,
+        )
+        self.edges.append(edge)
+
+    def get_node_text(self, node) -> str:
+        return self.source[node.start_byte:node.end_byte].decode('utf-8')
+
+    def build(self, func_node, func_name: str) -> CFGInfo:
+        entry = self.new_block("entry", func_node.start_point[0] + 1)
+        self.entry_block_id = entry.id
+        self.current_block = entry
+
+        body = None
+        for child in func_node.children:
+            if child.type == "block":
+                body = child
+                break
+
+        if body:
+            self._visit_node(body)
+            if self.current_block:
+                self.current_block.end_line = max(
+                    self.current_block.end_line,
+                    body.end_point[0] + 1
+                )
+
+        if self.current_block and self.current_block.id not in self.exit_block_ids:
+            self.exit_block_ids.append(self.current_block.id)
+            self.current_block.block_type = "exit"
+            self.current_block.end_line = max(
+                self.current_block.end_line,
+                func_node.end_point[0] + 1
+            )
+
+        if not self.edges and len(self.blocks) == 1 and self.entry_block_id is not None:
+            self.blocks[0].block_type = "entry"
+            exit_block = self.new_block("exit", func_node.end_point[0] + 1)
+            self.add_edge(self.entry_block_id, exit_block.id, "unconditional")
+            self.exit_block_ids = [exit_block.id]
+
+        return CFGInfo(
+            function_name=func_name,
+            blocks=self.blocks,
+            edges=self.edges,
+            entry_block_id=self.entry_block_id,
+            exit_block_ids=self.exit_block_ids,
+            cyclomatic_complexity=self.decision_points + 1,
+        )
+
+    def _visit_node(self, node):
+        node_type = node.type
+        if node_type in ("if_expression", "if_statement"):
+            self._visit_if(node)
+        elif node_type in ("while_expression", "while_statement"):
+            self._visit_while(node)
+        elif node_type in ("for_expression", "for_statement"):
+            self._visit_for(node)
+        elif node_type == "switch_expression":
+            self._visit_switch(node)
+        elif node_type == "return_statement":
+            self._visit_return(node)
+        elif node_type == "break_statement":
+            self._visit_break(node)
+        elif node_type == "continue_statement":
+            self._visit_continue(node)
+        else:
+            for child in node.children:
+                if child.is_named:
+                    self._visit_node(child)
+
+    def _visit_if(self, node):
+        self.decision_points += 1
+
+        if self.current_block:
+            self.current_block.block_type = "branch"
+            self.current_block.end_line = node.start_point[0] + 1
+            branch_block_id = self.current_block.id
+        else:
+            branch = self.new_block("branch", node.start_point[0] + 1)
+            branch_block_id = branch.id
+
+        cond_node = node.child_by_field_name("condition")
+        condition = self.get_node_text(cond_node) if cond_node else "<condition>"
+        after_if = self.new_block("body", node.end_point[0] + 1)
+
+        consequence = node.child_by_field_name("consequence")
+        if not consequence:
+            for child in node.children:
+                if child.type == "block":
+                    consequence = child
+                    break
+
+        alternative = node.child_by_field_name("alternative")
+        if not alternative:
+            blocks_seen = 0
+            for child in node.children:
+                if child.type == "block":
+                    blocks_seen += 1
+                    if blocks_seen == 2:
+                        alternative = child
+                        break
+                elif child.type in ("else_clause", "else"):
+                    alternative = child
+                    break
+
+        if not consequence:
+            for child in node.children:
+                if child.is_named and child.type not in ("else_clause", "else", "identifier", "binary_expression"):
+                    if child != alternative:
+                        consequence = child
+                        break
+
+        if consequence:
+            true_block = self.new_block("body", consequence.start_point[0] + 1, consequence.end_point[0] + 1)
+            self.add_edge(branch_block_id, true_block.id, "true", condition)
+            self.current_block = true_block
+            self._visit_node(consequence)
+            if self.current_block and self.current_block.id not in self.exit_block_ids:
+                self.add_edge(self.current_block.id, after_if.id, "unconditional")
+
+        if alternative:
+            false_block = self.new_block("body", alternative.start_point[0] + 1, alternative.end_point[0] + 1)
+            self.add_edge(branch_block_id, false_block.id, "false", f"not ({condition})")
+            self.current_block = false_block
+            self._visit_node(alternative)
+            if self.current_block and self.current_block.id not in self.exit_block_ids:
+                self.add_edge(self.current_block.id, after_if.id, "unconditional")
+        else:
+            self.add_edge(branch_block_id, after_if.id, "false", f"not ({condition})")
+
+        self.current_block = after_if
+
+    def _visit_while(self, node):
+        self.decision_points += 1
+
+        guard = self.new_block("loop_header", node.start_point[0] + 1)
+        if self.current_block:
+            self.add_edge(self.current_block.id, guard.id, "unconditional")
+
+        after_loop = self.new_block("body", node.end_point[0] + 1)
+
+        self.loop_guard_stack.append(guard.id)
+        self.after_loop_stack.append(after_loop.id)
+
+        body = node.child_by_field_name("body")
+
+        if body:
+            loop_body = self.new_block("loop_body", body.start_point[0] + 1, body.end_point[0] + 1)
+            cond_node = node.child_by_field_name("condition")
+            while_cond = self.get_node_text(cond_node) if cond_node else "<while_cond>"
+            self.add_edge(guard.id, loop_body.id, "true", while_cond)
+            self.add_edge(guard.id, after_loop.id, "false", f"not ({while_cond})")
+
+            self.current_block = loop_body
+            self._visit_node(body)
+
+            if self.current_block and self.current_block.id not in self.exit_block_ids:
+                self.add_edge(self.current_block.id, guard.id, "back_edge")
+
+        self.loop_guard_stack.pop()
+        self.after_loop_stack.pop()
+        self.current_block = after_loop
+
+    def _visit_for(self, node):
+        self.decision_points += 1
+
+        guard = self.new_block("loop_header", node.start_point[0] + 1)
+        if self.current_block:
+            self.add_edge(self.current_block.id, guard.id, "unconditional")
+
+        after_loop = self.new_block("body", node.end_point[0] + 1)
+
+        self.loop_guard_stack.append(guard.id)
+        self.after_loop_stack.append(after_loop.id)
+
+        body = node.child_by_field_name("body")
+
+        if body:
+            loop_body = self.new_block("loop_body", body.start_point[0] + 1, body.end_point[0] + 1)
+            self.add_edge(guard.id, loop_body.id, "iterate")
+            self.add_edge(guard.id, after_loop.id, "exhausted")
+
+            self.current_block = loop_body
+            self._visit_node(body)
+
+            if self.current_block and self.current_block.id not in self.exit_block_ids:
+                self.add_edge(self.current_block.id, guard.id, "back_edge")
+
+        self.loop_guard_stack.pop()
+        self.after_loop_stack.pop()
+        self.current_block = after_loop
+
+    def _visit_return(self, node):
+        if self.current_block:
+            self.current_block.block_type = "return"
+            self.current_block.end_line = node.start_point[0] + 1
+            self.exit_block_ids.append(self.current_block.id)
+        self.current_block = self.new_block("body", node.start_point[0] + 1)
+
+    def _visit_break(self, node):
+        if self.after_loop_stack and self.current_block:
+            self.add_edge(self.current_block.id, self.after_loop_stack[-1], "break")
+            self.current_block = self.new_block("body", node.start_point[0] + 1)
+
+    def _visit_continue(self, node):
+        if self.loop_guard_stack and self.current_block:
+            self.add_edge(self.current_block.id, self.loop_guard_stack[-1], "continue")
+            self.current_block = self.new_block("body", node.start_point[0] + 1)
+
+    def _visit_switch(self, node):
+        self.decision_points += 1
+
+        if self.current_block:
+            self.current_block.block_type = "branch"
+            self.current_block.end_line = node.start_point[0] + 1
+            switch_block_id = self.current_block.id
+        else:
+            switch_block = self.new_block("branch", node.start_point[0] + 1)
+            switch_block_id = switch_block.id
+
+        after_switch = self.new_block("body", node.end_point[0] + 1)
+
+        for child in node.children:
+            if child.type in ("switch_arm", "switch_prong"):
+                self.decision_points += 1
+                arm_block = self.new_block("body", child.start_point[0] + 1, child.end_point[0] + 1)
+                self.add_edge(switch_block_id, arm_block.id, "case")
+                self.current_block = arm_block
+                self._visit_node(child)
+                if self.current_block and self.current_block.id not in self.exit_block_ids:
+                    self.add_edge(self.current_block.id, after_switch.id, "unconditional")
+
+        self.current_block = after_switch
+
+
+def _find_zig_function_node(root, function_name: str, source: bytes):
+    def find_in_node(node):
+        if node.type in ("function_declaration", "test_declaration"):
+            for child in node.children:
+                if child.type == "identifier":
+                    name = source[child.start_byte:child.end_byte].decode('utf-8')
+                    if name == function_name:
+                        return node
+                    break
+
+        for child in node.children:
+            result = find_in_node(child)
+            if result:
+                return result
+        return None
+
+    return find_in_node(root)
+
+
+def extract_zig_cfg(source: str, function_name: str) -> CFGInfo:
+    if not TREE_SITTER_ZIG_AVAILABLE:
+        raise ImportError("tree-sitter-zig not available")
+
+    source_bytes = source.encode('utf-8')
+    parser = _get_ts_parser("zig")
+    tree = parser.parse(source_bytes)
+
+    func_node = _find_zig_function_node(tree.root_node, function_name, source_bytes)
+    if not func_node:
+        raise ValueError(f"Function '{function_name}' not found in source")
+
+    builder = ZigCFGBuilder(source_bytes)
     return builder.build(func_node, function_name)
